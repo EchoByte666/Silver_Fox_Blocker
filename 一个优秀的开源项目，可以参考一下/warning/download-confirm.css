@@ -1,0 +1,87 @@
+* { margin:0; padding:0; box-sizing:border-box; }
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft YaHei',
+    'PingFang SC', 'Hiragino Sans GB', sans-serif;
+  background: #1a1a2e; color: #e0e0e0; font-size: 14px;
+  overflow-x: hidden;
+}
+
+.confirm-container {
+  max-width: 100%; padding: 0;
+}
+
+/* ===== 顶部橙色标题 ===== */
+.confirm-header {
+  background: linear-gradient(135deg, #e65100, #f57c00);
+  padding: 24px 24px 20px; text-align: center;
+}
+.confirm-icon { font-size: 48px; margin-bottom: 8px; }
+.confirm-header h1 { color: #fff; font-size: 20px; margin: 0 0 4px; }
+.confirm-subtitle { color: rgba(255,255,255,0.75); font-size: 12px; }
+
+/* ===== 风险摘要 ===== */
+.risk-summary { padding: 20px 24px; display: flex; align-items: center; gap: 16px;
+  background: #3e2a1a; border-bottom: 2px solid #e65100; }
+.risk-badge { text-align: center; flex-shrink: 0; }
+.risk-badge.danger { background: #e65100; color: #fff; padding: 10px 16px;
+  border-radius: 12px; }
+.risk-label { display: block; font-size: 11px; opacity: 0.85; }
+.risk-score { display: block; font-size: 32px; font-weight: 800; line-height: 1.1; }
+.risk-message strong { color: #ff9800; font-size: 14px; }
+.risk-message p { color: #ccc; font-size: 12px; margin-top: 4px; }
+
+/* ===== 信息区域 ===== */
+.info-section { padding: 16px 24px; background: #16213e; }
+.info-row { display: flex; justify-content: space-between; padding: 6px 0; font-size: 13px; }
+.info-label { color: #888; min-width: 70px; }
+.info-value { color: #e0e0e0; font-weight: 500; word-break: break-all; text-align: right; }
+.danger-text { color: #ff9800; }
+
+/* ===== 官方网站 ===== */
+.official-section { margin: 12px 24px; padding: 16px; background: #1b3a1b;
+  border: 1px solid #4CAF50; border-radius: 8px; text-align: center; }
+.official-header { color: #4CAF50; font-weight: 600; font-size: 14px; margin-bottom: 6px; }
+.official-domain { color: #a5d6a7; font-size: 13px; word-break: break-all; margin-bottom: 10px; }
+.btn-official { display: inline-block; background: #4CAF50; color: #fff; padding: 8px 20px;
+  border-radius: 6px; text-decoration: none; font-weight: 600; font-size: 13px;
+  transition: background 0.2s; }
+.btn-official:hover { background: #388E3C; }
+
+/* ===== 操作按钮 ===== */
+.actions { padding: 16px 24px 8px; display: flex; flex-direction: column; gap: 10px; }
+
+.btn-action {
+  display: flex; align-items: center; gap: 12px;
+  width: 100%; padding: 14px 16px; border: 1px solid transparent;
+  border-radius: 8px; cursor: pointer; text-align: left;
+  transition: all 0.2s; background: #1e2a3a;
+}
+.btn-action:hover { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(0,0,0,0.3); }
+.btn-icon { font-size: 20px; flex-shrink: 0; }
+.btn-content { display: flex; flex-direction: column; gap: 2px; }
+.btn-title { font-size: 14px; font-weight: 600; }
+.btn-desc { font-size: 11px; opacity: 0.7; }
+
+/* 仅此次放行 */
+.btn-allow-once { border-color: #4CAF50; color: #a5d6a7; }
+.btn-allow-once:hover { background: #1b3a1b; color: #c8e6c9; }
+.btn-allow-once .btn-title { color: #4CAF50; }
+
+/* 信任网站 */
+.btn-trust-site { border-color: #2196F3; color: #90caf9; }
+.btn-trust-site:hover { background: #1a2a3e; color: #bbdefb; }
+.btn-trust-site .btn-title { color: #42a5f5; }
+
+/* 拦截并拉黑 */
+.btn-block { border-color: #f44336; color: #ef9a9a; }
+.btn-block:hover { background: #2a1a1a; color: #ffcdd2; }
+.btn-block .btn-title { color: #ef5350; }
+
+/* ===== 安全提示 ===== */
+.tips-section { padding: 12px 24px; margin: 8px 0; }
+.tips-section p { font-size: 12px; color: #999; line-height: 1.5; }
+
+/* ===== 底部 ===== */
+.auto-close-hint { padding: 8px 24px 16px; text-align: center; color: #757575;
+  font-size: 11px; min-height: 20px; }

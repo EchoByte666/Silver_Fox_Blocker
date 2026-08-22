@@ -1,0 +1,809 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <!-- CSP：允许内联样式与 HTTPS 远程规则源连接（v2.1.1 移除 http 明文源） -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' https:;">
+  <title>银狐拦截系统</title>
+  <style>
+    /* ===== 设计变量 =====
+       统一管理配色与圆角，方便后续整体调整主题；
+       深色主题（v2.0.0 新增）通过 body.dark 覆盖同一组变量实现 */
+    :root {
+      --bg: #eef2f7;            /* 页面底色：浅蓝灰 */
+      --card: #ffffff;          /* 卡片底色 */
+      --border: #e2e8f0;        /* 常规边框色 */
+      --text-1: #0f172a;        /* 主文字：近黑 */
+      --text-2: #64748b;        /* 次级文字：中灰 */
+      --text-3: #94a3b8;        /* 弱化文字：浅灰 */
+      --blue: #2563eb;          /* 品牌蓝 */
+      --green: #059669;         /* 安全绿（启用态） */
+      --red: #dc2626;           /* 警示红（暂停态/危险操作） */
+      --amber: #d97706;         /* 琥珀色（加载中） */
+      --radius: 12px;           /* 卡片统一圆角 */
+    }
+
+    /* ===== 全局基础样式 ===== */
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    /* ===== 全局自定义细滚动条（v2.1.0 新增）=====
+       所有可滚动区域统一细滚动条：透明轨道 + 圆角灰色滑块；
+       同时兼容 Firefox（scrollbar-width / scrollbar-color 标准属性）
+       与 Chromium（::-webkit-scrollbar 前缀属性），深色主题在 body.dark 段覆盖 */
+    :root {
+      scrollbar-width: thin;                  /* Firefox：细滚动条 */
+      scrollbar-color: #cbd5e1 transparent;   /* Firefox：滑块色 / 轨道色 */
+    }
+    ::-webkit-scrollbar { width: 3px; height: 3px; }         /* Chromium：3px 超细条（v2.1.0 再调细） */
+    ::-webkit-scrollbar-track { background: transparent; }    /* 轨道透明，视觉更轻 */
+    ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 2px; }
+    ::-webkit-scrollbar-thumb:hover { background: #94a3b8; } /* 悬停加深，便于拖动 */
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft YaHei', sans-serif;
+      width: 380px;                 /* 弹窗固定宽度 */
+      background: var(--bg);
+      color: var(--text-1);
+      font-size: 14px;
+      -webkit-font-smoothing: antialiased;
+      transition: background 0.25s, color 0.25s;   /* 主题切换时的柔和过渡 */
+    }
+
+    /* ===== 顶部品牌头部 =====
+       深蓝渐变底 + 白色文字，底部多留一段高度，
+       供下方状态卡片以负 margin 悬浮叠放，形成层次感 */
+    .header {
+      background: linear-gradient(135deg, #0f172a 0%, #1e3a8a 55%, #2563eb 135%);
+      padding: 18px 18px 54px;   /* 底部多留渐变露出高度，避免压缩感 */
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      color: #fff;
+    }
+    /* 头部图标容器：半透明白底圆角方块，内置白色盾牌 SVG */
+    .header-icon {
+      width: 40px;
+      height: 40px;
+      background: rgba(255, 255, 255, 0.14);
+      border: 1px solid rgba(255, 255, 255, 0.18);
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #fff;
+      flex-shrink: 0;
+    }
+    .header-text { flex: 1; min-width: 0; }
+    .header-text h2 {
+      font-size: 15px;
+      font-weight: 700;
+      color: #fff;
+      letter-spacing: 0.02em;
+    }
+    .header-text .header-sub {
+      font-size: 11px;
+      color: rgba(255, 255, 255, 0.65);
+      display: block;
+      margin-top: 2px;
+    }
+    /* 版本徽章：半透明白底胶囊，extVersion 由 popup.js 填充 */
+    .ver-badge {
+      background: rgba(255, 255, 255, 0.14);
+      border: 1px solid rgba(255, 255, 255, 0.18);
+      color: rgba(255, 255, 255, 0.9);
+      font-size: 10px;
+      font-family: Consolas, monospace;
+      padding: 3px 8px;
+      border-radius: 20px;
+      flex-shrink: 0;
+    }
+    /* ===== 主题切换按钮（v2.0.0 新增）=====
+       位于头部右侧，浅色主题显示月亮（点击切深色），
+       深色主题显示太阳（点击切浅色）。
+       v2.1.0：图标由字符改为内联 SVG（由 popup.js 切换），
+       按钮改为 flex 布局保证 SVG 图标居中 */
+    .theme-toggle {
+      width: 30px;
+      height: 30px;
+      border: 1px solid rgba(255, 255, 255, 0.18);
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.14);
+      color: rgba(255, 255, 255, 0.9);
+      cursor: pointer;
+      display: flex;                   /* flex 居中 SVG 图标 */
+      align-items: center;
+      justify-content: center;
+      padding: 0;                      /* 清除按钮默认内边距，图标严格居中 */
+      flex-shrink: 0;
+      transition: background 0.15s;
+    }
+    .theme-toggle:hover { background: rgba(255, 255, 255, 0.26); }
+
+    /* ===== 内容区 =====
+       负 margin 向上叠进头部，卡片群整体悬浮在渐变之上 */
+    .content {
+      position: relative;
+      z-index: 1;
+      margin-top: -38px;
+      padding: 0 12px 14px;
+    }
+
+    /* ===== 入场动画 =====
+       各卡片依次淡入上移，营造轻盈的打开体验 */
+    @keyframes fadeUp {
+      from { opacity: 0; transform: translateY(8px); }
+      to   { opacity: 1; transform: none; }
+    }
+    .status-card   { animation: fadeUp .35s ease .02s both; }
+    .stats-row     { animation: fadeUp .35s ease .08s both; }
+    .rule-status   { animation: fadeUp .35s ease .14s both; }
+    .score-card    { animation: fadeUp .35s ease .17s both; }
+    .list-card     { animation: fadeUp .35s ease .22s both; }
+    .footer-actions{ animation: fadeUp .35s ease .28s both; }
+    .support-actions{ animation: fadeUp .35s ease .32s both; }
+
+    /* ===== 状态卡片 =====
+       白底悬浮卡：左侧状态灯 + 文案，右侧总开关 */
+    .status-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      box-shadow: 0 6px 18px rgba(15, 23, 42, 0.08);
+      padding: 14px 16px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .status-indicator {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    /* 状态呼吸灯：带柔和光圈，状态色由 popup.js 切换类名 */
+    .status-dot {
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      display: inline-block;
+      transition: background 0.3s, box-shadow 0.3s;
+      flex-shrink: 0;
+    }
+    .status-dot.active {          /* 启用：绿色 + 呼吸光圈动画 */
+      background: var(--green);
+      box-shadow: 0 0 0 3px rgba(5, 150, 105, 0.15);
+      animation: breathe 2.4s ease-in-out infinite;
+    }
+    .status-dot.inactive {        /* 暂停：红色 + 静态光圈 */
+      background: var(--red);
+      box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.15);
+      animation: none;
+    }
+    /* 呼吸动画：光圈周期性扩散，暗示"实时防护中" */
+    @keyframes breathe {
+      0%, 100% { box-shadow: 0 0 0 3px rgba(5, 150, 105, 0.15); }
+      50%      { box-shadow: 0 0 0 6px rgba(5, 150, 105, 0.07); }
+    }
+    .status-text {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text-1);
+    }
+
+    /* ===== 开关组件 =====
+       自定义 toggle，启用态使用品牌绿 */
+    .toggle-switch {
+      position: relative;
+      width: 44px;
+      height: 24px;
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+    .toggle-switch input { opacity: 0; width: 0; height: 0; }
+    .toggle-slider {
+      position: absolute;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: #cbd5e1;
+      border-radius: 24px;
+      transition: 0.25s;
+    }
+    .toggle-slider::before {
+      content: "";
+      position: absolute;
+      width: 18px;
+      height: 18px;
+      left: 3px;
+      bottom: 3px;
+      background: #fff;
+      border-radius: 50%;
+      transition: 0.25s cubic-bezier(0.34, 1.56, 0.64, 1); /* 回弹缓动，手感更灵 */
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+    }
+    .toggle-switch input:checked + .toggle-slider { background: var(--green); }
+    .toggle-switch input:checked + .toggle-slider::before { transform: translateX(20px); }
+
+    /* ===== 统计卡片行 =====
+       三个并排白卡，顶部色条 + 彩色数字区分三类数据 */
+    .stats-row {
+      display: flex;
+      gap: 8px;
+      margin-top: 10px;
+    }
+    .stat-card {
+      flex: 1;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 12px 6px 10px;
+      text-align: center;
+      position: relative;
+      overflow: hidden;             /* 配合顶部色条裁切 */
+    }
+    /* 顶部装饰色条：三张卡各配主题色 */
+    .stat-card::before {
+      content: "";
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      height: 3px;
+    }
+    .stat-card.blocked::before  { background: var(--red); }   /* 拦截数：红 */
+    .stat-card.rules::before    { background: var(--blue); }  /* 规则数：蓝 */
+    .stat-card.whitelist::before{ background: var(--green); } /* 白名单：绿 */
+    .stat-card .num {
+      font-size: 21px;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums; /* 等宽数字，变化时不抖动 */
+      line-height: 1.2;
+      margin-top: 2px;
+    }
+    /* 数字颜色与顶部色条呼应 */
+    .stat-card.blocked .num   { color: var(--red); }
+    .stat-card.rules .num     { color: var(--blue); }
+    .stat-card.whitelist .num { color: var(--green); }
+    .stat-card .label {
+      font-size: 11px;
+      color: var(--text-2);
+      margin-top: 3px;
+    }
+
+    /* ===== 规则状态行 =====
+       一行小字显示规则来源与更新时间，状态色由类名控制 */
+    .rule-status {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      padding: 12px 6px 8px;
+      font-size: 11.5px;
+      color: var(--text-2);
+    }
+    /* 状态圆点图标（v2.1.0：由 ● 字符改为内联 SVG，
+       fill=currentColor 跟随下方 color 规则变色，闪烁动画作用于整个 SVG） */
+    .rule-status-icon {
+      width: 10px;
+      height: 10px;
+      flex-shrink: 0;
+    }
+    .rule-status.ok .rule-status-icon      { color: var(--green); }
+    .rule-status.error .rule-status-icon   { color: var(--red); }
+    .rule-status.loading .rule-status-icon { color: var(--amber); }
+    /* 加载中：圆点闪烁动画 */
+    .rule-status.loading .rule-status-icon { animation: blink 1.2s ease-in-out infinite; }
+    @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
+
+    /* ===== 当前页面评分卡片（v2.0.0 新增）=====
+       可折叠面板：summary 显示总分，展开后列出 30 项风险指标的
+       命中明细（标签 + 证据 + 得分），数据来自 content.js 评分引擎 */
+    .score-card {
+      margin-top: 2px;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;             /* 让明细列表贴合卡片圆角 */
+    }
+    .score-summary {
+      padding: 11px 14px;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-2);
+      letter-spacing: 0.03em;
+      cursor: pointer;
+      list-style: none;             /* 隐藏浏览器默认三角 */
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid #f1f5f9;
+      user-select: none;
+    }
+    .score-summary::-webkit-details-marker { display: none; }
+    /* 自定义折叠箭头（v2.1.0：由 ▾/▴ 字符改为内联 SVG 下箭头，
+       展开时旋转 180°，配合 transition 过渡更平滑；
+       文案放入独立 span，避免 JS 更新文案时覆盖 SVG） */
+    .score-summary .chev-icon {
+      color: var(--text-3);
+      flex-shrink: 0;
+      transition: transform 0.2s;
+    }
+    .score-card[open] .score-summary .chev-icon { transform: rotate(180deg); }
+    /* 明细滚动区：30 项指标较长，限高避免弹窗过长
+       v2.1.0 优化"滚动条跳出感"（展开评分明细时的三层治理）：
+       1) scrollbar-gutter:stable 常驻预留滚动条槽位——展开时内容宽度
+          不再因滚动条占位而瞬间收窄跳动（未溢出时也只是留一条空槽）；
+       2) 滑块默认完全透明（只保留轨道空间），悬停明细区时才淡现——
+          避免展开瞬间一条灰棒突兀戳出；Firefox 用 scrollbar-color 同理；
+       3) 展开时列表整体复用 fadeUp 淡入，滚动条随内容一起自然浮现
+       （动画挂在 [open] 属性选择器上，每次展开都会重新触发） */
+    .score-list {
+      max-height: 190px;
+      overflow-y: auto;
+      padding: 4px 0 6px;
+      scrollbar-gutter: stable;                  /* 常驻槽位，宽度不跳 */
+      scrollbar-color: transparent transparent;  /* Firefox：滑块先隐形 */
+    }
+    .score-list:hover { scrollbar-color: #cbd5e1 transparent; }        /* Firefox：悬停显现 */
+    .score-list::-webkit-scrollbar-thumb { background: transparent; }  /* Chromium：滑块先隐形 */
+    .score-list:hover::-webkit-scrollbar-thumb { background: #cbd5e1; }
+    .score-list:hover::-webkit-scrollbar-thumb:hover { background: #94a3b8; }  /* 拖动时加深 */
+    .score-card[open] .score-list { animation: fadeUp .3s ease; }      /* 展开随内容淡入 */
+    /* 单项指标行：左侧"标签 · 证据"，右侧得分；命中项加亮 */
+    .score-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      gap: 10px;
+      padding: 6px 14px;
+      font-size: 11px;
+      color: var(--text-3);
+      line-height: 1.4;
+    }
+    .score-item.hit { color: var(--text-1); }
+    .score-item .score-label { min-width: 0; }
+    .score-points {
+      flex-shrink: 0;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+    }
+    .score-points.positive { color: var(--red); }    /* 加分项（风险）：红 */
+    .score-points.negative { color: var(--green); }  /* 减分项（安全）：绿 */
+
+    /* ===== 域名情报查询区（v2.1.3 新增）=====
+       popup 打开时自动查询当前页的域名年龄（RDAP）与 ICP 备案，
+       查询期间显示旋转加载动画，完成后追加为评分明细的增强项 */
+    .intel-loading {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 14px 4px;
+      font-size: 11px;
+      color: var(--text-3);
+    }
+    /* 旋转加载环：2px 圆环 + 顶部缺口，环绕动画 */
+    .intel-spinner {
+      width: 12px;
+      height: 12px;
+      border: 2px solid #dbe3ef;
+      border-top-color: var(--blue);
+      border-radius: 50%;
+      animation: intelSpin 0.8s linear infinite;
+      flex-shrink: 0;
+    }
+    @keyframes intelSpin { to { transform: rotate(360deg); } }
+    /* 查询失败态：浅红背景提示条 */
+    .intel-error {
+      margin: 4px 10px 6px;
+      padding: 8px 10px;
+      font-size: 11px;
+      color: #b91c1c;
+      background: #fef2f2;
+      border-radius: 8px;
+    }
+    /* 增强项分隔标题：域龄/备案查询结果区块的标题行 */
+    .intel-header {
+      padding: 8px 14px 2px;
+      font-size: 10.5px;
+      font-weight: 700;
+      color: var(--text-3);
+      letter-spacing: 0.05em;
+    }
+    /* 深色主题适配 */
+    body.dark .intel-spinner { border-color: #2a2f45; border-top-color: var(--blue); }
+    body.dark .intel-error { color: #ff8fa3; background: rgba(255, 65, 108, 0.1); }
+
+    /* ===== 白名单列表卡片 =====
+       统一装进一张白卡，标题与列表一体呈现 */
+    .list-card {
+      margin-top: 10px;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;             /* 让列表滚动区贴合卡片圆角 */
+    }
+    .section-title {
+      padding: 11px 14px 9px;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-2);
+      letter-spacing: 0.03em;
+      border-bottom: 1px solid #f1f5f9;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    /* 标题右侧的"清空"小按钮（危险操作，浅红小字） */
+    .clear-btn {
+      background: transparent;
+      border: none;
+      color: var(--red);
+      font-size: 11px;
+      font-family: inherit;
+      cursor: pointer;
+      padding: 2px 6px;
+      border-radius: 6px;
+      transition: background 0.15s;
+      opacity: 0.85;
+    }
+    .clear-btn:hover { background: rgba(220, 38, 38, 0.09); opacity: 1; }
+    .clear-btn:disabled { opacity: 0.4; cursor: default; }
+
+    /* 列表滚动容器：限高避免弹窗过长
+       （滚动条样式由全局细滚动条规则统一提供，v2.1.0） */
+    .whitelist-container {
+      max-height: 176px;
+      overflow-y: auto;
+      padding: 8px;
+    }
+
+    /* ===== 白名单条目 =====
+       由 popup.js 动态创建：site-badge 图标 + 域名 + 删除按钮 */
+    .whitelist-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 7px 8px;
+      margin-bottom: 4px;
+      background: #f8fafc;
+      border: 1px solid transparent;
+      border-radius: 8px;
+      font-size: 12px;
+      transition: background 0.15s, border-color 0.15s;
+    }
+    .whitelist-item:hover {
+      background: #f1f5f9;
+      border-color: var(--border);
+    }
+    /* 网站图标徽章：圆形浅蓝底 + 地球 SVG */
+    .site-badge {
+      width: 22px;
+      height: 22px;
+      border-radius: 50%;
+      background: #eff6ff;
+      color: var(--blue);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+    .whitelist-item .url {
+      flex: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      color: #334155;
+      font-family: Consolas, monospace;  /* 域名用等宽字体更易读 */
+      font-size: 11.5px;
+      padding-right: 4px;
+    }
+    .whitelist-item .remove-btn {
+      background: transparent;
+      border: none;
+      color: var(--text-3);
+      cursor: pointer;
+      display: flex;                  /* v2.1.0：内部改为 SVG 关闭图标，flex 居中 */
+      align-items: center;
+      justify-content: center;
+      padding: 4px 6px;
+      border-radius: 6px;
+      transition: all 0.15s;
+      flex-shrink: 0;
+      line-height: 1;
+    }
+    .whitelist-item .remove-btn:hover {
+      background: rgba(220, 38, 38, 0.09);
+      color: var(--red);
+    }
+
+    /* ===== 白名单手动添加区 =====
+       输入框 + 添加按钮并排，位于卡片标题与列表之间，
+       用于免拦截地豁免误报域名（如被模式规则误伤的安全站） */
+    .whitelist-add {
+      display: flex;
+      gap: 6px;
+      padding: 10px 12px;
+      border-bottom: 1px solid #f1f5f9;   /* 与标题底部分隔线呼应 */
+    }
+    .whitelist-add input {
+      flex: 1;
+      min-width: 0;                       /* 允许收缩，长域名不撑破弹窗 */
+      padding: 7px 10px;
+      font-size: 12px;
+      font-family: Consolas, monospace;   /* 与白名单条目一致用等宽字体 */
+      color: var(--text-1);
+      background: #f8fafc;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      outline: none;
+      transition: border-color 0.15s, background 0.15s;
+    }
+    .whitelist-add input:focus {
+      border-color: var(--blue);          /* 聚焦高亮边框 */
+      background: #fff;
+    }
+    .whitelist-add input::placeholder { color: var(--text-3); }
+    .whitelist-add button {
+      padding: 7px 14px;
+      font-size: 12px;
+      font-weight: 600;
+      font-family: inherit;
+      cursor: pointer;
+      border: none;
+      border-radius: 8px;
+      background: #eff6ff;                /* 浅蓝底蓝字，与主操作按钮风格一致 */
+      color: #1d4ed8;
+      transition: background 0.15s, transform 0.1s;
+      flex-shrink: 0;                     /* 按钮固定宽度不被压缩 */
+    }
+    .whitelist-add button:hover { background: #dbeafe; }
+    .whitelist-add button:active { transform: scale(0.97); } /* 按下微缩反馈 */
+    .whitelist-add button:disabled { opacity: 0.6; cursor: default; }
+
+    /* ===== 空状态提示 ===== */
+    .empty-state {
+      margin: 2px 4px 6px;
+      padding: 16px;
+      text-align: center;
+      color: var(--text-3);
+      font-size: 12px;
+      background: #f8fafc;
+      border-radius: 8px;
+      border: 1px dashed #cbd5e1;
+    }
+    /* 评分面板内空状态（无 margin，贴合滚动区） */
+    .score-list .empty-state { margin: 4px 10px 6px; padding: 12px; }
+
+    /* ===== 错误/结果提示条 =====
+       display 与颜色由 popup.js 内联控制，这里只管布局 */
+    .rule-error {
+      margin-top: 10px;
+      padding: 8px 12px;
+      font-size: 11.5px;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      word-break: break-all;
+    }
+
+    /* ===== 底部操作按钮区 =====
+       第一行：更新黑名单和品牌库（主操作，蓝）+ 重新评分 */
+    .footer-actions {
+      padding: 12px 2px 2px;
+      display: flex;
+      gap: 8px;
+    }
+    .footer-actions .btn {
+      flex: 1;
+      padding: 9px 10px;
+      border: 1px solid transparent;
+      border-radius: 8px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background-color 0.15s, border-color 0.15s, color 0.15s, transform 0.1s;
+      min-height: 34px;
+      text-align: center;
+      font-family: inherit;
+      line-height: 1.3;
+    }
+    .footer-actions .btn:active { transform: scale(0.97); } /* 按下微缩反馈 */
+    /* 主操作：实心品牌蓝底白字（更新黑名单和品牌库）
+       v2.1.0 修复：原浅蓝底 #eff6ff 与页面底色 #eef2f7 几乎一致，
+       按钮轮廓完全融入背景、对比度约等于零；改为实心蓝底白字后
+       与页面背景形成强对比，主操作的视觉权重也随之增强 */
+    .btn-primary-sm {
+      background: var(--blue);
+      color: #fff;
+    }
+    .btn-primary-sm:hover { background: #1d4ed8; }   /* 悬停加深一档蓝 */
+    .btn-primary-sm:disabled { opacity: 0.6; cursor: default; }
+    /* 次操作：白底描边灰字（重新评分/测试连接等） */
+    .btn-outline-sm {
+      background: var(--card);
+      border-color: var(--border);
+      color: #475569;
+    }
+    .btn-outline-sm:hover { background: #f8fafc; color: var(--text-1); }
+    .btn-outline-sm:disabled { opacity: 0.6; cursor: default; }
+    /* 危险操作：浅红底红字（清空白名单） */
+    .btn-danger-sm {
+      background: #fef2f2;
+      color: var(--red);
+    }
+    .btn-danger-sm:hover { background: #fee2e2; }
+
+    /* ===== 辅助操作按钮行（v2.0.0 新增）=====
+       第二行：测试连接（保留 1.1.1）+ 问题反馈 + 获取通知
+       v2.1.0 修复：原 padding-top:0 叠加首行仅 2px 的下内边距，
+       两行按钮几乎贴在一起；现补 10px 上内边距，行距共 12px，
+       与首行 12px 顶部内边距的留白节奏保持一致 */
+    .support-actions { padding-top: 10px; }
+
+    /* ===== 深色主题（v2.0.0 新增）=====
+       body.dark 时覆盖设计变量，再修正少量硬编码浅色的组件；
+       主题偏好持久化于 settings.theme，由 popup.js 切换 */
+    body.dark {
+      --bg: #0a0e1a;             /* 深夜蓝底 */
+      --card: #141a2e;           /* 深色卡片 */
+      --border: #2a2f45;         /* 深色边框 */
+      --text-1: #ccd6f6;         /* 主文字：亮蓝白 */
+      --text-2: #8892b0;         /* 次级文字 */
+      --text-3: #5b6485;         /* 弱化文字 */
+      --blue: #6b9aff;           /* 提亮的品牌蓝（深底可读） */
+      --green: #2ecc71;          /* 提亮的安全绿 */
+      --red: #ff416c;            /* 提亮的警示红 */
+      --amber: #f39c12;          /* 提亮的琥珀色 */
+    }
+    body.dark .status-card { box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35); }
+    body.dark .toggle-slider { background: #3a3f5c; }
+    body.dark .section-title,
+    body.dark .score-summary { border-bottom-color: #232947; }
+    body.dark .whitelist-add { border-bottom-color: #232947; }
+    body.dark .whitelist-item { background: rgba(255, 255, 255, 0.03); }
+    body.dark .whitelist-item:hover {
+      background: rgba(255, 255, 255, 0.07);
+      border-color: var(--border);
+    }
+    body.dark .whitelist-item .url { color: #a9b4d6; }
+    body.dark .site-badge { background: rgba(107, 154, 255, 0.14); }
+    body.dark .whitelist-add input {
+      background: #0f1528;
+      border-color: var(--border);
+      color: var(--text-1);
+    }
+    body.dark .whitelist-add input:focus { background: #0b1020; border-color: var(--blue); }
+    body.dark .whitelist-add button { background: rgba(107, 154, 255, 0.16); color: #8db2ff; }
+    body.dark .whitelist-add button:hover { background: rgba(107, 154, 255, 0.26); }
+    body.dark .empty-state { background: rgba(255, 255, 255, 0.03); border-color: #2a2f45; }
+    /* 深色主题下的细滚动条配色（v2.1.0：全局滚动条的深色覆盖） */
+    body.dark { scrollbar-color: #3a3f5c transparent; }
+    body.dark ::-webkit-scrollbar-thumb { background: #3a3f5c; }
+    body.dark ::-webkit-scrollbar-thumb:hover { background: #4a5075; }
+    /* 评分明细滚动条的深色适配（v2.1.0）：
+       全局深色滑块规则特异性更高，会覆盖明细区的"默认透明"，
+       这里按同样的悬停显现逻辑用更高特异性重写一遍 */
+    body.dark .score-list { scrollbar-color: transparent transparent; }
+    body.dark .score-list:hover { scrollbar-color: #3a3f5c transparent; }
+    body.dark .score-list::-webkit-scrollbar-thumb { background: transparent; }
+    body.dark .score-list:hover::-webkit-scrollbar-thumb { background: #3a3f5c; }
+    body.dark .score-list:hover::-webkit-scrollbar-thumb:hover { background: #4a5075; }
+    /* 深色主题主操作按钮：实心提亮蓝底 + 深夜蓝文字
+       （v2.1.0：白字在 #6b9aff 上对比不足，改用深色文字保证可读性；
+       悬停再提亮一档，与浅色主题的悬停加深方向相反但逻辑一致） */
+    body.dark .btn-primary-sm { background: var(--blue); color: #0a0e1a; }
+    body.dark .btn-primary-sm:hover { background: #8db2ff; }
+    body.dark .btn-outline-sm:hover { background: rgba(255, 255, 255, 0.05); color: var(--text-1); }
+    body.dark .btn-danger-sm { background: rgba(255, 65, 108, 0.13); }
+    body.dark .btn-danger-sm:hover { background: rgba(255, 65, 108, 0.22); }
+  </style>
+</head>
+<body>
+  <!-- ===== 顶部品牌头部：渐变底 + 盾牌图标 + 版本徽章 + 主题切换 ===== -->
+  <header class="header">
+    <div class="header-icon" aria-hidden="true">
+      <!-- 内联 SVG 盾牌（带对勾），替代原 emoji 图标，更精致且不受 CSP 限制 -->
+      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 2.5l7.5 3v5.2c0 4.8-3.2 8.7-7.5 9.8-4.3-1.1-7.5-5-7.5-9.8V5.5l7.5-3z"/>
+        <path d="M8.8 12.2l2.2 2.2 4.2-4.4"/>
+      </svg>
+    </div>
+    <div class="header-text">
+      <h2>银狐拦截系统</h2>
+      <span class="header-sub">恶意网站自动拦截防护</span>
+    </div>
+    <span class="ver-badge" id="extVersion">v2.0.0</span>
+    <!-- v2.0.0 新增：主题切换按钮（浅色默认，点击切换深色）；
+         v2.1.0：初始月亮图标改为内联 SVG，后续由 popup.js 在太阳/月亮 SVG 间切换 -->
+    <button class="theme-toggle" id="themeToggle" type="button" title="切换深色主题" aria-label="切换深色主题">
+      <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+    </button>
+  </header>
+
+  <main class="content">
+    <!-- ===== 状态卡片：防护开关 ===== -->
+    <section class="status-card">
+      <div class="status-indicator">
+        <span class="status-dot active" id="statusDot"></span>
+        <span class="status-text" id="statusText">拦截已启用</span>
+      </div>
+      <label class="toggle-switch" title="启用 / 暂停拦截">
+        <input type="checkbox" id="toggleEnabled" checked>
+        <span class="toggle-slider"></span>
+      </label>
+    </section>
+
+    <!-- ===== 统计卡片行：拦截数 / 规则数 / 白名单数 ===== -->
+    <section class="stats-row">
+      <div class="stat-card blocked">
+        <div class="num" id="blockedCount">0</div>
+        <div class="label">已拦截次数</div>
+      </div>
+      <div class="stat-card rules">
+        <div class="num" id="ruleCount">-</div>
+        <div class="label">拦截规则数</div>
+      </div>
+      <div class="stat-card whitelist">
+        <div class="num" id="whitelistCount">0</div>
+        <div class="label">白名单数量</div>
+      </div>
+    </section>
+
+    <!-- ===== 规则状态行：来源与更新时间 =====
+         v2.1.0：圆点图标改为内联 SVG（fill=currentColor 跟随状态色） -->
+    <div class="rule-status" id="ruleStatus">
+      <svg class="rule-status-icon" viewBox="0 0 24 24" width="10" height="10" aria-hidden="true"><circle cx="12" cy="12" r="8" fill="currentColor"/></svg>
+      <span id="ruleStatusText">等待获取规则列表...</span>
+    </div>
+
+    <!-- ===== 当前页面评分面板（v2.0.0 新增）=====
+         summary 显示"评分明细 · 总分 / 阈值"，展开后列出各风险指标；
+         数据流：content.js 评分引擎 → getPageScore 消息 → renderScore。
+         当前页为警告页时改由 getBlockedUrl 取拦截时的评分快照 -->
+    <details class="score-card" id="popupScorePanel">
+      <!-- v2.1.0：summary 内文案独立成 span（JS 按 id 更新），箭头为内联 SVG -->
+      <summary class="score-summary">
+        <span id="popupScoreSummary">评分明细 · -- / 100</span>
+        <svg class="chev-icon" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+      </summary>
+      <div class="score-list" id="scoreList">
+        <div class="empty-state">打开普通网页后查看评分</div>
+      </div>
+    </details>
+
+    <!-- ===== 白名单列表卡片 ===== -->
+    <section class="list-card">
+      <div class="section-title">
+        <span>白名单管理</span>
+        <!-- 清空按钮移至标题行（v2.0.0 布局精简），逻辑不变 -->
+        <button class="clear-btn" id="clearWhitelistBtn" title="清空全部白名单记录">清空</button>
+      </div>
+      <!-- ===== 手动添加白名单：输入域名或完整 URL，规范化后入库 =====
+           写入 storage 后由 background 的 storage.onChanged 自动重建
+           匹配集并更新 DNR 规则，四层防护立即放行该域名 -->
+      <div class="whitelist-add">
+        <input type="text" id="whitelistInput"
+               placeholder="输入域名"
+               maxlength="200" autocomplete="off" spellcheck="false">
+        <button id="addWhitelistBtn" title="添加到白名单">添加</button>
+      </div>
+      <div class="whitelist-container" id="whitelistContainer">
+        <div class="empty-state" id="emptyState">暂无白名单记录</div>
+      </div>
+    </section>
+
+    <!-- ===== 操作结果提示条（由 popup.js 控制显隐与颜色） ===== -->
+    <div class="rule-error" id="ruleError" style="display:none;"></div>
+
+    <!-- ===== 底部操作按钮（第一行：核心操作） =====
+         "更新黑名单和品牌库"沿用 1.1.1 的 refreshRules 消息 +
+         rulesUpdated 广播等待机制，后台会同时刷新品牌库（v2.0.0） -->
+    <div class="footer-actions">
+      <button class="btn btn-primary-sm" id="refreshRulesBtn">更新黑名单和品牌库</button>
+      <button class="btn btn-outline-sm" id="rescoreBtn">重新评分</button>
+    </div>
+    <!-- ===== 底部操作按钮（第二行：辅助操作，v2.0.0 新增反馈/通知） ===== -->
+    <div class="footer-actions support-actions">
+      <button class="btn btn-outline-sm" id="testFetchBtn">测试连接</button>
+      <button class="btn btn-outline-sm" id="feedbackBtn">问题反馈</button>
+      <button class="btn btn-outline-sm" id="notificationsBtn">获取通知</button>
+    </div>
+  </main>
+
+  <script src="popup.js"></script>
+</body>
+</html>

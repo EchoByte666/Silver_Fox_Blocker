@@ -1,0 +1,52 @@
+{
+  "manifest_version": 3,
+  "name": "银狐拦截系统",
+  "version": "2.0.0",
+  "description": "银狐病毒网站拦截系统 - 从远程规则列表获取恶意网址并自动拦截",
+  "minimum_chrome_version": "109",
+  "author": "Deep_Format (https://space.bilibili.com/1222118214), EchoByte",
+  "permissions": [
+    "webNavigation",
+    "storage",
+    "tabs",
+    "alarms",
+    "offscreen",
+    "scripting",
+    "declarativeNetRequest"
+  ],
+  "host_permissions": [
+    "https://dfcloud.qzz.io/*",
+    "http://*/*",
+    "https://*/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["content.js"],
+      "run_at": "document_start",
+      "all_frames": true,
+      "match_about_blank": true
+    }
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "web_accessible_resources": [{
+    "resources": ["warning.html"],
+    "matches": ["http://*/*", "https://*/*"]
+  }],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "银狐拦截系统",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}

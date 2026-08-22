@@ -1,0 +1,1004 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <!-- CSP 保持不变：仅允许自身样式，禁止外部连接，确保警告页无法外传数据 -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline';">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>银狐拦截系统 - 安全警告</title>
+    <style>
+        /* ===== 设计变量 =====
+           统一管理配色，拦截页（红）与欢迎页（绿）各自取用；
+           深色主题（v2.0.0 新增）通过 body.dark 覆盖同一组变量实现 */
+        :root {
+            --bg: #f4f6fa;          /* 页面底色：浅蓝灰 */
+            --card: #ffffff;        /* 主卡片底色 */
+            --border: #e2e8f0;      /* 常规边框 */
+            --text-1: #0f172a;      /* 主文字 */
+            --text-2: #64748b;      /* 次级文字 */
+            --text-3: #94a3b8;      /* 弱化文字 */
+            --red: #dc2626;         /* 警示红 */
+            --red-deep: #b91c1c;    /* 深红（hover/强调） */
+            --red-bg: #fef2f2;      /* 浅红底 */
+            --red-border: #fecaca;  /* 红色边框 */
+            --amber: #d97706;       /* 琥珀（次级警示操作） */
+            --green: #059669;       /* 安全绿 */
+            --green-deep: #047857;  /* 深绿（hover） */
+            --green-bg: #d1fae5;    /* 浅绿底 */
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        /* ===== 全局自定义细滚动条（v2.1.0 新增）=====
+           所有可滚动区域统一细滚动条：透明轨道 + 圆角灰色滑块；
+           同时兼容 Firefox（scrollbar-width / scrollbar-color 标准属性）
+           与 Chromium（::-webkit-scrollbar 前缀属性），深色主题在 body.dark 段覆盖 */
+        :root {
+            scrollbar-width: thin;                  /* Firefox：细滚动条 */
+            scrollbar-color: #cbd5e1 transparent;   /* Firefox：滑块色 / 轨道色 */
+        }
+        ::-webkit-scrollbar { width: 3px; height: 3px; }         /* Chromium：3px 超细条（v2.1.0 再调细） */
+        ::-webkit-scrollbar-track { background: transparent; }    /* 轨道透明，视觉更轻 */
+        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 2px; }
+        ::-webkit-scrollbar-thumb:hover { background: #94a3b8; } /* 悬停加深，便于拖动 */
+
+        /* ===== 全局背景 =====
+           浅蓝灰底 + 顶部一层极淡的红色氛围光，
+           让用户在打开页面的瞬间就感受到"警示"情绪 */
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft YaHei', sans-serif;
+            background: var(--bg);
+            min-height: 100vh;
+            color: var(--text-1);
+            -webkit-font-smoothing: antialiased;
+            padding: 48px 20px 40px;
+            position: relative;
+            transition: background 0.25s, color 0.25s;   /* 主题切换柔和过渡 */
+        }
+        /* 氛围光：固定定位的径向渐变，不拦截任何点击 */
+        body::before {
+            content: "";
+            position: fixed;
+            inset: 0;
+            background: radial-gradient(ellipse 70% 40% at 50% 0%, rgba(220, 38, 38, 0.07), transparent 70%);
+            pointer-events: none;
+        }
+
+        /* ===== 主题切换按钮（v2.0.0 新增）=====
+           固定在右上角，浅色主题显示月亮（点击切深色），
+           深色主题显示太阳（点击切浅色）。
+           v2.1.0：图标由字符改为内联 SVG（由 warning.js 切换），
+           按钮改为 flex 布局保证 SVG 图标居中 */
+        .theme-toggle {
+            position: fixed;
+            top: 18px;
+            right: 18px;
+            width: 36px;
+            height: 36px;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            background: var(--card);
+            color: var(--text-2);
+            cursor: pointer;
+            display: flex;               /* flex 居中 SVG 图标 */
+            align-items: center;
+            justify-content: center;
+            padding: 0;                  /* 清除按钮默认内边距，图标严格居中 */
+            z-index: 10;
+            transition: background 0.15s, color 0.15s;
+        }
+        .theme-toggle:hover { background: #f1f5f9; color: var(--text-1); }
+
+        /* ===== 主容器 =====
+           居中限宽，内容装在白色圆角卡片中 */
+        .container {
+            max-width: 720px;
+            margin: 0 auto;
+            text-align: center;
+            position: relative;
+            z-index: 1;            /* 盖在氛围光之上 */
+        }
+
+        /* ===== 白色主卡片 =====
+           欢迎页与拦截页共用的外壳：顶部彩条 + 内边距 */
+        .panel {
+            background: var(--card);
+            border-radius: 16px;
+            box-shadow: 0 12px 40px rgba(2, 6, 23, 0.10), 0 2px 8px rgba(2, 6, 23, 0.04);
+            overflow: hidden;       /* 让顶部彩条贴合圆角 */
+        }
+        .panel .inner {
+            padding: 40px 36px 36px;
+        }
+
+        /* ===== 拦截页：平铺式布局 =====
+           不使用白色卡片容器，内容直接平铺在页面背景上，
+           更接近浏览器原生安全警告页的观感 */
+        .block-section {
+            max-width: 640px;           /* 内容限宽，长行文字更易读 */
+            margin: 0 auto;
+            text-align: center;
+        }
+
+        /* ===== 欢迎页顶部彩条 =====
+           绿色渐变（安全确认，位于欢迎卡片顶部） */
+        .strip {
+            height: 6px;
+            background: linear-gradient(90deg, var(--green), #10b981);
+        }
+
+        /* ===== 盾牌图标 =====
+           圆形浅色底 + 内联 SVG，拦截页带脉动光圈动画 */
+        .shield-icon {
+            width: 84px;
+            height: 84px;
+            margin: 0 auto 22px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        /* 拦截页：浅红底 + 红色警盾 + 脉动光圈 */
+        .shield-icon.danger {
+            background: var(--red-bg);
+            color: var(--red);
+            animation: pulse 2s ease-out infinite;
+        }
+        /* 欢迎页：浅绿底 + 绿色盾牌，静态呈现 */
+        .shield-icon.ok {
+            background: var(--green-bg);
+            color: var(--green);
+        }
+        /* 脉动动画：红色光圈向外扩散并淡出，持续提醒危险 */
+        @keyframes pulse {
+            0%   { box-shadow: 0 0 0 0 rgba(220, 38, 38, 0.28); }
+            70%  { box-shadow: 0 0 0 18px rgba(220, 38, 38, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(220, 38, 38, 0); }
+        }
+
+        h1 {
+            font-size: 26px;
+            font-weight: 800;
+            color: var(--text-1);
+            margin-bottom: 8px;
+            letter-spacing: 0.01em;
+        }
+        .subtitle {
+            font-size: 15px;
+            color: var(--text-2);
+            margin-bottom: 30px;
+        }
+
+        /* ===== 警告信息框 =====
+           浅红底 + 左侧红色粗条 + 细红边框，聚焦展示恶意地址 */
+        .warning-box {
+            background: var(--red-bg);
+            border: 1px solid var(--red-border);
+            border-left: 5px solid var(--red);
+            border-radius: 10px;
+            padding: 18px 22px;
+            margin-bottom: 20px;            /* v2.1.0：各区块间距统一 20px */
+            text-align: left;
+        }
+        /* v2.1.0：label 改为 flex 布局，内部放置 SVG 警示三角（取代原 ⚠ 字符） */
+        .warning-box .label {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 12px;
+            color: var(--red);
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            margin-bottom: 6px;
+            font-weight: 700;
+        }
+        .warning-box .label svg { flex-shrink: 0; }   /* 图标不参与文字截断 */
+        .warning-box .url-display {
+            font-size: 13.5px;
+            color: #334155;
+            word-break: break-all;
+            background: #ffffff;
+            padding: 10px 14px;
+            border-radius: 8px;
+            font-family: Consolas, 'Courier New', monospace;
+            margin-top: 10px;
+            border: 1px solid var(--border);
+        }
+        .danger-text {
+            font-size: 16px;
+            font-weight: 700;
+            color: var(--red);
+            margin-top: 2px;
+        }
+
+        /* ===== 拦截原因卡片（v2.1.0 新增）=====
+           位于警告信息框与评分面板之间，展示"为什么被拦截"：
+           头部 = 标题 + 确切度徽章（跟随主原因级别变色），
+           主体 = 原因条目（彩色图标 + 名称 + 说明），
+           品牌冒充命中时由 JS 追加补充条目（虚线分隔区分主次） */
+        .reason-box {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            margin-bottom: 20px;            /* v2.1.0：各区块间距统一 20px */
+            text-align: left;
+            overflow: hidden;             /* 内容贴合卡片圆角 */
+        }
+        .reason-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 10px 16px;
+            border-bottom: 1px solid var(--border);
+        }
+        /* 标题：小号大写字距文字，与警告框 label 的视觉语言一致 */
+        .reason-title {
+            font-size: 11.5px;
+            font-weight: 700;
+            letter-spacing: 0.1em;
+            color: var(--text-2);
+            text-transform: uppercase;
+        }
+        /* 确切度徽章：胶囊底色按级别区分（高=红系，中=琥珀系） */
+        .reason-cert {
+            font-size: 10.5px;
+            font-weight: 700;
+            padding: 2.5px 9px;
+            border-radius: 20px;
+            letter-spacing: 0.02em;
+            white-space: nowrap;
+        }
+        .reason-cert.high { background: var(--red-bg); color: var(--red); }
+        .reason-cert.mid  { background: #fef3c7; color: #b45309; }
+        /* 原因条目：圆角方形图标 + 文字块（名称 + 说明） */
+        .reason-item {
+            display: flex;
+            align-items: flex-start;
+            gap: 12px;
+            padding: 12px 16px;
+        }
+        .reason-item + .reason-item { border-top: 1px dashed var(--border); }  /* 次要条目虚线分隔 */
+        .reason-icon {
+            width: 30px;
+            height: 30px;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+        }
+        .reason-icon.high { background: var(--red-bg); color: var(--red); }
+        .reason-icon.mid  { background: #fef3c7; color: #d97706; }
+        .reason-name {
+            font-size: 13.5px;
+            font-weight: 700;
+            color: var(--text-1);
+            line-height: 1.35;
+        }
+        .reason-desc {
+            font-size: 12px;
+            color: var(--text-2);
+            margin-top: 2px;
+            line-height: 1.55;
+        }
+
+        /* ===== 风险评分面板（v2.0.0 新增）=====
+           可折叠面板：summary 显示总分，展开后列出各风险指标明细。
+           数据来自拦截时后台保存的评分快照（getBlockedUrl 消息获取），
+           默认隐藏，由 warning.js 的 renderScore 在有评分数据时显示 */
+        .score-panel {
+            display: none;                 /* 有评分数据时由 JS 改为 block */
+            margin-bottom: 20px;            /* v2.1.0：各区块间距统一 20px */
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            overflow: hidden;
+            text-align: left;
+            background: var(--card);
+        }
+        .score-total {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 12px;
+            padding: 12px 18px;
+            background: var(--red-bg);
+            color: var(--text-1);
+            font-weight: 700;
+            font-size: 14px;
+            cursor: pointer;
+            list-style: none;              /* 隐藏浏览器默认三角 */
+            user-select: none;
+        }
+        .score-total::-webkit-details-marker { display: none; }
+        .score-summary-value { margin-left: auto; font-variant-numeric: tabular-nums; }
+        /* 折叠箭头（v2.1.0：由 ▼ 字符改为内联 SVG，展开时旋转 180°） */
+        .score-chevron { color: var(--text-3); flex-shrink: 0; transition: transform 0.2s; }
+        .score-panel[open] .score-chevron { transform: rotate(180deg); }
+        /* 评分明细滚动区（v2.1.0）：30 项指标较长，限高启用滚动。
+           "滚动条跳出感"三层治理（与 popup 评分面板同方案）：
+           1) scrollbar-gutter:stable 常驻预留槽位，展开时内容宽度不跳；
+           2) 滑块默认透明、悬停明细区才显现，避免展开瞬间灰棒戳出
+              （ID 选择器特异性高于全局与深色全局规则，透明态稳定生效）；
+           3) 展开时明细整体复用 fadeUp 淡入，滚动条随内容一起浮现 */
+        #scoreDetails {
+            max-height: 300px;
+            overflow-y: auto;
+            scrollbar-gutter: stable;                  /* 常驻槽位，宽度不跳 */
+            scrollbar-color: transparent transparent;  /* Firefox：滑块先隐形 */
+        }
+        #scoreDetails:hover { scrollbar-color: #cbd5e1 transparent; }        /* Firefox：悬停显现 */
+        #scoreDetails::-webkit-scrollbar-thumb { background: transparent; }  /* Chromium：滑块先隐形 */
+        #scoreDetails:hover::-webkit-scrollbar-thumb { background: #cbd5e1; }
+        #scoreDetails:hover::-webkit-scrollbar-thumb:hover { background: #94a3b8; }  /* 拖动时加深 */
+        .score-panel[open] #scoreDetails { animation: fadeUp .3s ease; }     /* 展开随内容淡入 */
+        /* 单项指标行：左侧"标签 · 证据"，右侧得分；命中项加亮 */
+        .score-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: baseline;
+            gap: 12px;
+            padding: 8px 18px;
+            border-top: 1px solid var(--border);
+            color: var(--text-3);
+            font-size: 12.5px;
+            line-height: 1.5;
+        }
+        .score-row.hit { color: var(--text-1); }
+        .score-value {
+            flex-shrink: 0;
+            font-weight: 700;
+            font-variant-numeric: tabular-nums;
+        }
+        .score-value.positive { color: var(--red); }    /* 加分项（风险）：红 */
+        .score-value.negative { color: var(--green); }  /* 减分项（安全）：绿 */
+
+        /* ===== 安全状态条（v2.1.0 重构，替代原"访问已被拦截"列表项）=====
+           白卡容器 + 三枚绿色胶囊徽章（对勾图标 + 短语）+ 底部安心副文案。
+           语义上从被动陈述（"您尚未访问"）改为主动安全确认（拦截成功的保障），
+           颜色刻意区别于上方红色警告——先危险提示、再安心保障的信息节奏 */
+        .safe-status {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            margin-bottom: 20px;
+            padding: 14px 16px 12px;
+            text-align: center;
+        }
+        .safe-badges {
+            display: flex;
+            justify-content: center;
+            gap: 10px;
+            flex-wrap: wrap;                /* 窄屏自动换行，避免挤压 */
+        }
+        /* 单枚徽章：浅绿胶囊底 + 绿色对勾图标 + 短语 */
+        .safe-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            background: var(--green-bg);
+            color: var(--green-deep);
+            font-size: 12px;
+            font-weight: 700;
+            padding: 5px 12px;
+            border-radius: 20px;
+            white-space: nowrap;
+        }
+        /* 底部副文案：弱化灰字，说明三徽章的共同含义 */
+        .safe-note {
+            font-size: 12px;
+            color: var(--text-3);
+            margin-top: 9px;
+        }
+
+        /* ===== 威胁背景说明（v2.1.0 重构，替代原 .details 列表）=====
+           弱化的灰字小区块，仅提供背景知识，不再重复上方警告框/
+           拦截原因卡片已说明的内容；virus 场景的红条（virusExtra）
+           置于区块顶部，样式与整体统一 */
+        .threat-notes {
+            margin-bottom: 20px;
+            text-align: left;
+            padding: 0 6px;
+        }
+        /* virus 场景高亮条：浅红底 + 警示图标（display 由 warning.js 切为 flex） */
+        .threat-alert {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            background: var(--red-bg);
+            border: 1px solid var(--red-border);
+            color: var(--red-deep);
+            font-size: 13px;
+            font-weight: 700;
+            padding: 10px 14px;
+            border-radius: 8px;
+            margin-bottom: 10px;
+        }
+        .threat-alert svg { flex-shrink: 0; }
+        /* 背景知识条目：纯灰字小字，无圆点，行距宽松 */
+        .threat-item {
+            font-size: 12.5px;
+            color: var(--text-3);
+            line-height: 1.8;
+        }
+        .threat-item + .threat-item { margin-top: 2px; }
+
+        /* ===== 操作提示行（v2.1.0 新增，替代原列表尾条）=====
+           位于悬浮按钮组正上方，一行居中灰字；
+           与按钮上"推荐/不推荐"小字标注形成呼应 */
+        .action-hint {
+            text-align: center;
+            font-size: 12px;
+            color: var(--text-3);
+            margin-bottom: 10px;
+        }
+
+        /* ===== 欢迎页说明列表 =====
+           绿色对勾徽章 + 灰色说明文字 */
+        .info-list {
+            text-align: left;
+            max-width: 480px;
+            margin: 0 auto 30px;
+            list-style: none;
+        }
+        .info-list li {
+            display: flex;
+            align-items: flex-start;
+            gap: 10px;
+            font-size: 14px;
+            color: #475569;
+            line-height: 1.7;
+            margin-bottom: 12px;
+        }
+        /* 对勾徽章（v2.1.0：由 ✓ 字符伪元素改为 li 内首个内联 SVG，
+           圆形浅绿底通过 svg 自身的 background + border-radius + padding 实现） */
+        .info-list li > svg {
+            flex-shrink: 0;
+            width: 20px;
+            height: 20px;
+            padding: 4px;                 /* box-sizing:border-box 下形成圆底四周留白 */
+            border-radius: 50%;
+            background: var(--green-bg);
+            color: var(--green);
+            margin-top: 2px;
+        }
+        /* 弱化的补充说明（最后一条） */
+        .info-list li.hint { color: var(--text-3); font-size: 13px; }
+        .info-list li.hint > svg { background: #f1f5f9; color: var(--text-3); }
+
+        /* ===== 按钮组 =====
+           拦截页按钮用 grid 完全等宽等高；
+           欢迎页单按钮 flex 居中 */
+        .btn-group {
+            display: flex;
+            gap: 12px;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+        .btn-group.equal {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 12px;
+        }
+        /* ===== 拦截页悬浮操作栏（v2.1.0 新增）=====
+           ID 限定只作用于拦截页按钮组（欢迎页不受影响）：
+           - position:sticky + bottom：内容较短时按钮在自然位置；
+             展开评分明细等内容变长时，按钮组悬浮吸附在视口底部上方，
+             用户无需滚动即可操作；滚动到页面底部时自动落回原位（不遮页脚）
+           - 半透明底 + backdrop-filter 毛玻璃：悬浮时内容从栏后掠过，
+             保持可读性的同时呈现"悬浮层"质感
+           - 圆角描边 + 投影：与页面卡片的视觉语言一致 */
+        #blockBtnGroup {
+            position: sticky;
+            bottom: 16px;                            /* 悬浮时距视口底部 16px */
+            z-index: 10;
+            background: rgba(255, 255, 255, 0.86);   /* 半透明白底（毛玻璃衬底） */
+            -webkit-backdrop-filter: blur(12px);     /* Safari 前缀 */
+            backdrop-filter: blur(12px);             /* 毛玻璃模糊 */
+            border: 1px solid var(--border);
+            border-radius: 14px;
+            padding: 10px;
+            margin-top: 8px;
+            box-shadow: 0 10px 32px rgba(2, 6, 23, 0.16), 0 2px 8px rgba(2, 6, 23, 0.06);
+        }
+        /* v2.0.0：品牌冒充命中时显示"前往正版网站"按钮，
+           四个按钮改为 2x2 网格保持整齐（由 JS 添加 four 类） */
+        .btn-group.equal.four { grid-template-columns: repeat(2, 1fr); }
+        /* ===== 宽屏侧栏模式（v2.1.0 新增）=====
+           视口 ≥1080px 时面板（720px）两侧各有充足空白，按钮组从
+           底部悬浮条改为固定悬浮在右侧空白区、垂直居中：
+           - 不再与页面内容重叠（底部条悬浮时会遮住滚过的内容），
+             任意时刻都可直接点击，且无"内容从栏后掠过"的干扰
+           - 纵向堆叠等宽按钮，主次关系（实心/描边）保持不变
+           - 侧栏位于空白区，无需毛玻璃衬底与描边，视觉更轻
+           - railIn 入场动画：以 translateY(-50%)（垂直居中）为基准的
+             上浮淡入；必须用它替换继承自 .inner > * 的 fadeUp——
+             fadeUp 的 both 填充会把最终 transform 锁成 none，
+             静态声明的 translateY(-50%) 会被永久覆盖导致定位失效 */
+        @media (min-width: 1080px) {
+            #blockBtnGroup {
+                position: fixed;                 /* 脱离文档流，悬浮于右侧空白 */
+                right: 28px;                     /* 距视口右缘 */
+                top: 50%;
+                transform: translateY(-50%);     /* 垂直居中（配合 railIn） */
+                display: flex;                   /* 覆盖 grid 三列：纵向堆叠成单列 */
+                flex-direction: column;
+                flex-wrap: nowrap;               /* 显式禁换列：.btn-group 基础类的
+                                                    flex-wrap:wrap 在矮视口下会把按钮
+                                                    换到第二列跑出屏幕，必须覆盖 */
+                gap: 10px;                       /* 统一列间距（覆盖各断点的 gap） */
+                width: 176px;                    /* 固定宽度容纳最长按钮文案 */
+                max-height: calc(100vh - 48px);  /* 矮视口保护：按钮栏绝不超出视口
+                                                    （上下各留 24px 呼吸边距） */
+                overflow-y: auto;                /* 极端矮视口下栏内可滚动，
+                                                    保证每个按钮都可达 */
+                scrollbar-width: none;           /* 隐藏栏内滚动条保持视觉干净
+                                                    （触控板/滚轮仍可滚动） */
+                z-index: 100;                    /* 高于面板与页内悬浮元素 */
+                background: none;                /* 空白区无需衬底 */
+                border: none;
+                box-shadow: none;
+                padding: 0;
+                margin-top: 0;
+                -webkit-backdrop-filter: none;
+                backdrop-filter: none;
+                animation: railIn .38s ease both; /* ID 优先级覆盖 fadeUp */
+            }
+            #blockBtnGroup .btn { width: 100%; flex-shrink: 0; } /* 等宽且不被压缩 */
+            body.dark #blockBtnGroup { background: none; box-shadow: none; }
+        }
+        /* 侧栏入场：从"居中位下方 14px"浮到位（保留与区块错峰淡入的节奏） */
+        @keyframes railIn {
+            from { opacity: 0; transform: translateY(-50%) translateY(14px); }
+            to   { opacity: 1; transform: translateY(-50%); }
+        }
+        /* 窄屏适配（v2.1.0 调整：拦截页按钮组已是悬浮条，
+           若维持纵向堆叠会占掉大半手机屏幕，故改为紧凑三列单行 +
+           缩小按钮尺寸，保证悬浮条在窄屏也只占约一行高度） */
+        @media (max-width: 560px) {
+            .btn-group.equal { grid-template-columns: repeat(3, 1fr); }        /* 三列单行 */
+            .btn-group.equal.four { grid-template-columns: repeat(2, 1fr); }   /* 四按钮 2x2 */
+            #blockBtnGroup { bottom: 10px; padding: 8px; gap: 8px; }           /* 悬浮条更贴底更紧凑 */
+            .btn { min-height: 46px; padding: 8px 6px; font-size: 12px; }      /* 按钮压缩尺寸 */
+            .btn small { font-size: 10px; }
+            .panel .inner { padding: 32px 22px 28px; }
+            h1 { font-size: 22px; }
+        }
+
+        /* ===== 按钮基础样式 =====
+           统一尺寸、圆角、字号；主操作实心，其余降级为描边，
+           通过视觉权重引导用户选择"关闭页面" */
+        .btn {
+            padding: 13px 16px;
+            border: 1.5px solid transparent;
+            border-radius: 10px;
+            font-size: 14px;
+            font-weight: 700;
+            cursor: pointer;
+            transition: background-color 0.15s, border-color 0.15s, color 0.15s, transform 0.1s, box-shadow 0.15s;
+            min-height: 52px;
+            line-height: 1.45;
+            text-align: center;
+            word-break: break-word;
+            font-family: inherit;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+        }
+        .btn:active { transform: scale(0.98); }      /* 按下微缩反馈 */
+        .btn:disabled { cursor: default; opacity: 0.65; }
+        /* 按钮内的小字副标题（如"非常不推荐"） */
+        .btn small {
+            font-size: 11px;
+            font-weight: 500;
+            opacity: 0.75;
+            margin-top: 2px;
+        }
+
+        /* 主操作：关闭页面（红色实心，唯一强调按钮） */
+        .btn-danger {
+            background: var(--red);
+            color: #fff;
+            box-shadow: 0 4px 14px rgba(220, 38, 38, 0.3);
+        }
+        .btn-danger:hover { background: var(--red-deep); }
+
+        /* v2.0.0：前往正版网站（绿色实心，品牌冒充时的安全引导） */
+        .btn-success {
+            background: var(--green);
+            color: #fff;
+            box-shadow: 0 4px 14px rgba(5, 150, 105, 0.28);
+        }
+        .btn-success:hover { background: var(--green-deep); }
+
+        /* 次操作：加入白名单（琥珀描边，视觉降级） */
+        .btn-warning-outline {
+            background: transparent;
+            border-color: var(--amber);
+            color: #b45309;
+        }
+        .btn-warning-outline:hover { background: #fffbeb; }
+
+        /* 次操作：继续访问（灰色描边，视觉最弱） */
+        .btn-neutral-outline {
+            background: transparent;
+            border-color: #cbd5e1;
+            color: #475569;
+        }
+        .btn-neutral-outline:hover { background: #f8fafc; color: var(--text-1); }
+
+        /* ===== 欢迎页 / 拦截页显隐控制 =====
+           warning.js 通过 add/remove show 类切换显示 */
+        .welcome-section { display: none; }
+        .welcome-section.show { display: block; }
+        .block-section { display: none; }
+        .block-section.show { display: block; }
+
+        /* ===== 入场动画 =====
+           面板淡入上移，过渡更平滑 */
+        @keyframes fadeUp {
+            from { opacity: 0; transform: translateY(10px); }
+            to   { opacity: 1; transform: none; }
+        }
+        .welcome-section.show { animation: fadeUp .4s ease both; }
+        /* v2.1.0：拦截页改为区块错峰淡入（整体动画会让所有内容同起同落，
+           层次感弱）——每个直接子区块带递增的 animation-delay，
+           从警盾到按钮组自上而下依次浮现 */
+        .block-section.show .inner > * { animation: fadeUp .38s ease both; }
+        .block-section.show .inner > :nth-child(1) { animation-delay: 0s; }
+        .block-section.show .inner > :nth-child(2) { animation-delay: .03s; }
+        .block-section.show .inner > :nth-child(3) { animation-delay: .06s; }
+        .block-section.show .inner > :nth-child(4) { animation-delay: .09s; }
+        .block-section.show .inner > :nth-child(5) { animation-delay: .12s; }
+        .block-section.show .inner > :nth-child(6) { animation-delay: .15s; }
+        .block-section.show .inner > :nth-child(7) { animation-delay: .18s; }
+        .block-section.show .inner > :nth-child(8) { animation-delay: .21s; }
+        .block-section.show .inner > :nth-child(n+9) { animation-delay: .24s; }
+
+        /* ===== 页脚 ===== */
+        .footer {
+            margin-top: 28px;
+            font-size: 12px;
+            color: var(--text-3);
+        }
+        .id-badge {
+            display: inline-block;
+            background: #eef2f7;
+            color: var(--text-2);
+            padding: 3px 10px;
+            border-radius: 6px;
+            font-size: 11px;
+            margin-top: 10px;
+            font-family: Consolas, 'Courier New', monospace;
+        }
+        .footer .deep-link {
+            color: var(--text-2);
+            text-decoration: none;
+            font-weight: 600;
+        }
+        .footer .deep-link:hover {
+            color: var(--red);
+            text-decoration: underline;
+        }
+        /* ===== 作者导航菜单（v2.1.0 新增）=====
+           点击页脚作者名 EchoByte 向上弹出导航列表（Bilibili/GitHub）；
+           页脚位于页面底部，故菜单向上弹出；开合动画 + 箭头旋转 */
+        .footer-line { margin: 3px 0; }               /* 页脚多行布局的行距 */
+        .author-menu-wrap { position: relative; display: inline-block; }
+        /* 作者名按钮：复用 deep-link 文字风格，重置按钮默认外观 */
+        .author-trigger {
+            background: none;
+            border: none;
+            cursor: pointer;
+            font: inherit;
+            padding: 0;
+            display: inline-flex;
+            align-items: center;
+            gap: 3px;
+        }
+        .author-chev { transition: transform 0.2s; }  /* 箭头随开合旋转 */
+        .author-menu-wrap.open .author-chev { transform: rotate(180deg); }
+        .author-menu {
+            position: absolute;
+            bottom: calc(100% + 8px);                 /* 在作者名上方弹出 */
+            left: 50%;
+            transform: translateX(-50%) translateY(4px);
+            opacity: 0;
+            pointer-events: none;                     /* 收起时不拦截点击 */
+            transition: opacity 0.18s, transform 0.18s;
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            box-shadow: 0 8px 24px rgba(2, 6, 23, 0.14), 0 2px 6px rgba(2, 6, 23, 0.06);
+            padding: 4px;
+            min-width: 140px;                         /* 加宽以容纳品牌图标 */
+            z-index: 20;
+            text-align: left;
+        }
+        .author-menu-wrap.open .author-menu {
+            opacity: 1;
+            transform: translateX(-50%) translateY(0);
+            pointer-events: auto;
+        }
+        /* 菜单项：链接暂留空（href="#"），由作者自行填写；
+           v2.1.0 更新：flex 布局容纳品牌 SVG 图标（图标走 currentColor 随主题适配） */
+        .author-menu-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 7px 12px;
+            border-radius: 6px;
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--text-1);
+            text-decoration: none;
+        }
+        .author-menu-item svg { flex-shrink: 0; opacity: .85; }
+        .author-menu-item:hover { background: #f1f5f9; color: var(--blue); }
+
+        /* ===== 深色主题（v2.0.0 新增）=====
+           body.dark 时覆盖设计变量，再修正少量硬编码浅色的组件；
+           主题偏好持久化于 settings.theme（与 popup 共享），
+           约定：'dark' 为深色，缺省为浅色（保留 1.1.1 默认外观） */
+        body.dark {
+            --bg: #0a0e1a;             /* 深夜蓝底 */
+            --card: #141a2e;           /* 深色卡片 */
+            --border: #2a2f45;         /* 深色边框 */
+            --text-1: #ccd6f6;         /* 主文字：亮蓝白 */
+            --text-2: #8892b0;         /* 次级文字 */
+            --text-3: #5b6485;         /* 弱化文字 */
+            --red: #ff416c;            /* 提亮警示红 */
+            --red-deep: #ff5f86;       /* 提亮深红（hover） */
+            --red-bg: rgba(255, 65, 108, 0.08);      /* 深底浅红块 */
+            --red-border: rgba(255, 65, 108, 0.3);   /* 深底红边框 */
+            --amber: #f39c12;          /* 提亮琥珀 */
+            --green: #2ecc71;          /* 提亮安全绿 */
+            --green-deep: #27ae60;     /* 提亮深绿（hover） */
+            --green-bg: rgba(46, 204, 113, 0.14);    /* 深底浅绿块 */
+        }
+        body.dark::before {
+            /* 氛围光在深色下适当增强，保持警示情绪 */
+            background: radial-gradient(ellipse 70% 40% at 50% 0%, rgba(255, 65, 108, 0.10), transparent 70%);
+        }
+        body.dark .theme-toggle:hover { background: rgba(255, 255, 255, 0.07); color: var(--text-1); }
+        body.dark .panel { box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45), 0 2px 8px rgba(0, 0, 0, 0.3); }
+        body.dark .warning-box .url-display {
+            background: #0f1528;
+            border-color: var(--border);
+            color: #a9b4d6;
+        }
+        body.dark .info-list li { color: var(--text-2); }
+        body.dark .info-list li > svg { background: rgba(46, 204, 113, 0.16); }
+        body.dark .info-list li.hint > svg { background: rgba(255, 255, 255, 0.06); }
+        /* 深色主题下的细滚动条配色（v2.1.0：全局滚动条的深色覆盖） */
+        body.dark { scrollbar-color: #3a3f5c transparent; }
+        body.dark ::-webkit-scrollbar-thumb { background: #3a3f5c; }
+        body.dark ::-webkit-scrollbar-thumb:hover { background: #4a5075; }
+        /* 评分明细滚动条的深色适配（v2.1.0）：
+           悬停显现色由浅灰换为深色主题滑块色，避免深底上过亮刺眼 */
+        body.dark #scoreDetails:hover { scrollbar-color: #3a3f5c transparent; }
+        body.dark #scoreDetails:hover::-webkit-scrollbar-thumb { background: #3a3f5c; }
+        body.dark #scoreDetails:hover::-webkit-scrollbar-thumb:hover { background: #4a5075; }
+        body.dark .btn-warning-outline { color: #f0b35c; }
+        body.dark .btn-warning-outline:hover { background: rgba(243, 156, 18, 0.08); }
+        body.dark .btn-neutral-outline { border-color: #3a3f5c; color: var(--text-2); }
+        body.dark .btn-neutral-outline:hover { background: rgba(255, 255, 255, 0.05); color: var(--text-1); }
+        body.dark .id-badge { background: rgba(255, 255, 255, 0.05); color: var(--text-2); }
+        /* 作者导航菜单的深色适配（v2.1.0）：加深投影，悬停底色换深色半透明 */
+        body.dark .author-menu { box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5), 0 2px 6px rgba(0, 0, 0, 0.3); }
+        body.dark .author-menu-item:hover { background: rgba(255, 255, 255, 0.06); }
+        /* 拦截原因卡片的深色适配（v2.1.0）：red 系走变量自动适配，
+           仅需覆盖硬编码的琥珀色徽章/图标底 */
+        body.dark .reason-cert.mid { background: rgba(243, 156, 18, 0.14); color: #f0b35c; }
+        body.dark .reason-icon.mid { background: rgba(243, 156, 18, 0.12); color: #f0b35c; }
+        /* 悬浮操作栏的深色适配（v2.1.0）：深色半透明毛玻璃衬底 + 加深投影。
+           仅窄/中屏（底部悬浮条模式）生效——宽屏侧栏模式无衬底，
+           且此规则源码顺序在侧栏重置之后（同特异性后者胜），必须显式限定 */
+        @media (max-width: 1079.98px) {
+            body.dark #blockBtnGroup {
+                background: rgba(20, 26, 46, 0.88);
+                box-shadow: 0 10px 32px rgba(0, 0, 0, 0.5), 0 2px 8px rgba(0, 0, 0, 0.35);
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- v2.0.0 新增：主题切换按钮（浅色默认，点击切换深色）；
+         v2.1.0：初始月亮图标改为内联 SVG，后续由 warning.js 在太阳/月亮 SVG 间切换 -->
+    <button class="theme-toggle" id="themeToggle" type="button" title="切换深色主题" aria-label="切换深色主题">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+    </button>
+
+    <div class="container">
+
+        <!-- ================= 欢迎页面（首次安装时显示） =================
+             绿色安全主题：绿色彩条 + 绿色盾牌 + 对勾说明列表 -->
+        <div class="welcome-section panel" id="welcomeSection">
+            <div class="strip ok"></div>
+            <div class="inner">
+                <!-- 绿色盾牌图标：盾内对勾，表示"已受保护" -->
+                <div class="shield-icon ok" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" width="42" height="42" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M12 2.5l7.5 3v5.2c0 4.8-3.2 8.7-7.5 9.8-4.3-1.1-7.5-5-7.5-9.8V5.5l7.5-3z"/>
+                        <path d="M8.8 12.2l2.2 2.2 4.2-4.4"/>
+                    </svg>
+                </div>
+                <h1>银狐拦截系统已安装</h1>
+                <p class="subtitle">您的浏览器现已受到保护</p>
+
+                <!-- 功能说明：绿色对勾逐条列出
+                     （v2.1.0：对勾由 ✓ 字符改为内联 SVG，圆形徽章底由 CSS 提供） -->
+                <ul class="info-list">
+                    <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>已自动加载恶意网站规则库，无需任何配置</li>
+                    <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>访问病毒网站时会被立即拦截，并显示安全警告页</li>
+                    <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>点击浏览器工具栏中的盾牌图标，可管理白名单与查看拦截统计</li>
+                    <li class="hint"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>建议保持拦截开关处于启用状态，以获得持续保护</li>
+                </ul>
+
+                <div class="btn-group">
+                    <button class="btn btn-success" id="welcomeCloseBtn">知道了，开始使用</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- ================= 拦截警告页面 =================
+             红色警示主题：平铺式布局（无卡片容器、无顶部彩条），
+             脉动警盾 + 警告信息框 + 评分明细 + 层次化按钮 -->
+        <div class="block-section" id="blockSection">
+            <div class="inner">
+                <!-- 红色警盾图标：盾内感叹号，带脉动光圈动画 -->
+                <div class="shield-icon danger" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" width="42" height="42" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M12 2.5l7.5 3v5.2c0 4.8-3.2 8.7-7.5 9.8-4.3-1.1-7.5-5-7.5-9.8V5.5l7.5-3z"/>
+                        <line x1="12" y1="8" x2="12" y2="13.2"/>
+                        <circle cx="12" cy="16.8" r="0.4"/>
+                    </svg>
+                </div>
+                <h1>安全警告</h1>
+                <p class="subtitle">银狐拦截系统已阻止恶意访问</p>
+
+                <!-- 恶意地址信息框（v2.1.0：⚠ 字符改为内联 SVG 警示三角） -->
+                <div class="warning-box">
+                    <div class="label">
+                        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13.2"/><line x1="12" y1="16.8" x2="12.01" y2="16.8"/></svg>
+                        检测到病毒网站
+                    </div>
+                    <div class="danger-text" id="dangerText">该网站已被识别恶意网站</div>
+                    <div class="url-display" id="blockedUrl">-</div>
+                </div>
+
+                <!-- ===== 拦截原因卡片（v2.1.0 新增）=====
+                     头部：标题 + 确切度徽章（颜色/文案由 warning.js 按原因级别填充）；
+                     主体：原因条目由 warning.js 渲染（主原因 + 可选的品牌冒充补充条目）；
+                     数据链路：后台各拦截路径保存 reason → getBlockedUrl → renderReason -->
+                <div class="reason-box" id="reasonBox">
+                    <div class="reason-header">
+                        <span class="reason-title">拦截原因</span>
+                        <span class="reason-cert high" id="reasonCert">确切度 最高</span>
+                    </div>
+                    <div id="reasonBody"></div>
+                </div>
+
+                <!-- ===== 安全状态条（v2.1.0 重构 / v2.1.3 动态化）=====
+                     三枚绿色徽章 + 安心副文案，紧跟红色警告之后形成
+                     "先危险提示、再安心保障"的信息节奏。
+                     v2.1.3 文案准确性修复：徽章与副文案由 warning.js 按拦截原因
+                     动态渲染（SAFE_STATUS_META）——旧版静态文案"内容未加载/
+                     脚本未执行/设备未接触任何内容"仅对 database（DNR 请求层
+                     拦截，页面从未加载）成立；pattern/score 是页面加载后的
+                     延迟拦截、resource 是加载过程中的请求拦截，统一宣称
+                     "未接触任何内容"与事实不符。此处的静态内容仅作无拦截
+                     记录时的兜底（DNR 静态重定向 → database 语义） -->
+                <div class="safe-status">
+                    <div class="safe-badges" id="safeBadges">
+                        <span class="safe-badge">
+                            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6L9 17l-5-5"/></svg>
+                            内容未加载
+                        </span>
+                        <span class="safe-badge">
+                            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6L9 17l-5-5"/></svg>
+                            脚本未执行
+                        </span>
+                        <span class="safe-badge">
+                            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6L9 17l-5-5"/></svg>
+                            文件未下载
+                        </span>
+                    </div>
+                    <div class="safe-note" id="safeNote">您的设备未接触该网站的任何内容</div>
+                </div>
+
+                <!-- ===== 风险评分面板（v2.0.0 新增）=====
+                     拦截时的评分快照：总分 + 各风险指标明细，
+                     默认隐藏，有评分数据时由 warning.js 显示 -->
+                <details class="score-panel" id="scorePanel">
+                    <summary class="score-total">
+                        <span>风险评分</span>
+                        <span class="score-summary-value" id="scoreTotal">0 / 100</span>
+                        <!-- v2.1.0：▼ 字符改为内联 SVG 箭头，展开时 CSS 旋转 180° -->
+                        <svg class="score-chevron" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+                    </summary>
+                    <div id="scoreDetails"></div>
+                </details>
+
+                <!-- ===== 威胁背景说明（v2.1.0 重构，替代原 .details 圆点列表）=====
+                     仅保留背景知识性文字（弱化灰字，不重复上方警告框/拦截原因
+                     卡片已说明的内容）；virusExtra（病毒下载警示红条）置于顶部，
+                     仅在拦截记录 reason=resource（实际检测到页面向恶意地址发起请求）时显示 -->
+                <div class="threat-notes">
+                    <div class="threat-alert" id="virusExtra" style="display:none;">
+                        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13.2"/><line x1="12" y1="16.8" x2="12.01" y2="16.8"/></svg>
+                        已拦截页面向恶意地址发起的请求，内容未到达您的设备
+                    </div>
+                    <div class="threat-item">此类网站通常捆绑病毒、木马或钓鱼程序，可能导致设备被远控或信息被窃取</div>
+                    <div class="threat-item">银狐病毒域名常被黑产团伙用于传播远程控制木马</div>
+                </div>
+
+                <!-- 操作提示行（v2.1.0：替代原列表尾条，与按钮风险标注呼应；
+                     文案方向中立——宽屏按钮在右侧空白区，窄屏在页面底部） -->
+                <div class="action-hint">确信该网站安全？可通过操作按钮继续访问</div>
+
+                <!-- 按钮网格：仅"关闭页面"为实心主操作，
+                     其余降级为描边样式并用小字标注风险等级；
+                     "前往正版网站"（v2.0.0）默认隐藏，品牌冒充命中时
+                     由 warning.js 显示并切换为 2x2 网格 -->
+                <div class="btn-group equal" id="blockBtnGroup">
+                    <button class="btn btn-danger" id="closePageBtn">
+                        关闭页面
+                        <small>推荐操作</small>
+                    </button>
+                    <button class="btn btn-success" id="officialSiteBtn" style="display:none;">
+                        前往正版网站
+                    </button>
+                    <button class="btn btn-warning-outline" id="whitelistBtn">
+                        加入白名单并访问
+                        <small>非常不推荐</small>
+                    </button>
+                    <button class="btn btn-neutral-outline" id="ignoreBtn">
+                        继续访问
+                        <small>不推荐</small>
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- ================= 页脚：版本与作者信息 =================
+             v2.1.0 改版：
+             第一行  作者：Deep_Format（原作，保留其 bilibili 主页链接）、
+                     EchoByte（当前维护者，点击弹出 Bilibili/GitHub 导航列表，
+                     链接暂留空待填）
+             第二行  扩展 ID 徽章（warning.js 动态填充 chrome.runtime.id） -->
+        <div class="footer">
+            <div class="footer-line">
+                银狐拦截系统 <span id="extensionVersion">v2.0.0</span> &middot; 作者：
+                <a class="deep-link" href="https://space.bilibili.com/1222118214" target="_blank" rel="noopener noreferrer">Deep_Format</a>&#12289;
+                <span class="author-menu-wrap">
+                    <button class="deep-link author-trigger" id="authorToggle" type="button"
+                            aria-haspopup="true" aria-expanded="false">
+                        EchoByte
+                        <!-- 下拉指示箭头（SVG，随开合旋转） -->
+                        <svg class="author-chev" viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+                    </button>
+                    <!-- 导航列表：点击作者名展开；href 暂为占位符，自行填写链接 -->
+                    <div class="author-menu" id="authorMenu">
+                        <!-- TODO: 填入你的 Bilibili 主页链接 -->
+                        <a class="author-menu-item" href="#" target="_blank" rel="noopener noreferrer">
+                            <!-- Bilibili 品牌图标：电视机造型（圆角机身 + 双天线 + 双眼），线条风格与整页图标一致 -->
+                            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="7.5" width="18" height="12.5" rx="2.5"/><path d="M8.4 7.5 6.2 4.1"/><path d="M15.6 7.5 17.8 4.1"/><path d="M9.6 12.4v1.7"/><path d="M14.4 12.4v1.7"/></svg>
+                            Bilibili
+                        </a>
+                        <!-- TODO: 填入你的 GitHub 主页链接 -->
+                        <a class="author-menu-item" href="#" target="_blank" rel="noopener noreferrer">
+                            <!-- GitHub 品牌图标：章鱼猫标志（官方 Mark 轮廓，填充风格） -->
+                            <svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.012 8.012 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
+                            GitHub
+                        </a>
+                    </div>
+                </span>
+            </div>
+            <div class="id-badge" id="extensionId">-</div>
+        </div>
+    </div>
+
+    <script src="warning.js"></script>
+</body>
+</html>

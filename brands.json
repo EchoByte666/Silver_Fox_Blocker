@@ -1,0 +1,140 @@
+{
+  "brands": [
+    {
+      "name": "火绒安全",
+      "keywords": ["火绒","huorong"],
+      "officialDomains": ["huorong.cn"],
+      "officialUrls": ["https://huorong.cn/"]
+    },
+    {
+      "name": "ToDesk",
+      "keywords": ["todesk"],
+      "officialDomains": ["todesk.com"],
+      "officialUrls": ["https://www.todesk.com/"]
+    },
+    {
+      "name": "网易UU远程",
+      "keywords": ["UU远程", "网易UU远程"],
+      "officialDomains": ["uuyc.163.com"],
+      "trustedDomains": ["apps.microsoft.com"],
+      "officialUrls": ["https://uuyc.163.com/"]
+    },
+    {
+      "name": "贝锐向日葵远程控制软件",
+      "keywords": ["向日葵远程", "向日葵远程"],
+      "officialDomains": ["oray.com"],
+      "trustedDomains": ["apps.microsoft.com"],
+      "officialUrls": ["https://sunlogin.oray.com/"]
+    },
+    {
+      "name": "Google Chrome",
+      "keywords": ["chrome","google","谷歌","谷歌浏览器"],
+      "officialDomains": ["google.com", "google.cn"],
+      "officialUrls": ["https://www.google.cn/chrome/","https://www.google.com/chrome/"]
+    },
+    {
+      "name": "Firefox",
+      "keywords": ["Firefox", "火狐"],
+      "officialDomains": ["firefox.com"],
+      "officialUrls": ["https://www.firefox.com/zh-CN/"]
+    },
+    {
+      "name": "爱思助手",
+      "keywords": ["爱思助手"],
+      "officialDomains": ["i4.cn"],
+      "officialUrls": ["https://www.i4.cn/"]
+    },
+    {
+      "name": "WPS",
+      "keywords": ["WPS"],
+      "officialDomains": ["wps.cn","wps.com"],
+      "officialUrls": ["https://wps.cn/"]
+    },
+    {
+      "name": "酷狗音乐",
+      "keywords": ["酷狗音乐","kugou"],
+      "officialDomains": ["kugou.com"],
+      "officialUrls": ["https://download.kugou.com/"]
+    },
+    {
+      "name": "QQ音乐",
+      "keywords": ["QQ音乐","QQmusic"],
+      "officialDomains": ["qq.com","qqmusic.com"],
+      "officialUrls": ["https://y.qq.com/download/download.html"]
+    },
+    {
+      "name": "酷我音乐",
+      "keywords": ["酷我音乐","kuwo music"],
+      "officialDomains": ["kuwo.cn"],
+      "officialUrls": ["https://www.kuwo.cn/down"]
+    },
+    {
+      "name": "汽水音乐",
+      "keywords": ["汽水音乐","qishuimusic","qishui"],
+      "officialDomains": ["douyin.com"],
+      "officialUrls": ["https://music.douyin.com/qishui"]
+    },
+    {
+      "name": "网易云音乐",
+      "keywords": ["网易云音乐","163music"],
+      "officialDomains": ["163.com"],
+      "officialUrls": ["https://music.163.com/#/download"]
+    },
+    {
+      "name": "罗技",
+      "keywords": ["罗技"],
+      "officialDomains": ["logitech.com"],
+      "officialUrls": ["https://www.logitech.com/zh-cn/software"]
+    },
+    {
+      "name": "爱加速",
+      "keywords": ["aijiasu","爱加速"],
+      "officialDomains": ["91ajs.com"],
+      "trustedDomains": ["apps.microsoft.com"],
+      "officialUrls": ["https://www.91ajs.com/"]
+    },
+    {
+      "name": "QuickQ VPN",
+      "keywords": ["QuickQ VPN"],
+      "officialDomains": ["quickq.io"],
+      "trustedDomains": ["apps.microsoft.com"],
+      "officialUrls": ["https://www.quickq.io/"]
+    },
+    {
+      "name": "Clash Verge",
+      "keywords": ["Clash Verge", "clash verge","Clash","clash"],
+      "officialDomains": ["github.com"],
+      "trustedDomains": ["apps.microsoft.com"],
+      "officialUrls": ["https://github.com/Clash-Verge-rev/clash-verge-rev"]
+    },
+    {
+      "name": "Lets VPN",
+      "keywords": ["Lets VPN", "kuailian","快连"],
+      "officialDomains": ["letsvpn.world"],
+      "trustedDomains": ["apps.microsoft.com"],
+      "officialUrls": ["https://letsvpn.world/"]
+    },
+    {
+      "name": "LightXtreme VPN",
+      "keywords": ["LightXtreme VPN", "shanlian","闪连"],
+      "officialDomains": ["lightxtremevpn.com"],
+      "trustedDomains": ["apps.microsoft.com"],
+      "officialUrls": ["https://lightxtremevpn.com/cn/"]
+    },
+    {
+      "name": "飞鸟加速",
+      "keywords": ["飞鸟加速"],
+      "officialDomains": ["vpnvpn.com","direct.fnjs.cloud"],
+      "trustedDomains": ["apps.microsoft.com"],
+      "officialUrls": ["https://vpnvpn.com//"]
+    },
+    {
+      "name": "Proton VPN",
+      "keywords": ["Proton VPN", "ProtonVPN"],
+      "officialDomains": ["protonvpn.com", "proton.me"],
+      "trustedDomains": ["apps.microsoft.com"],
+      "officialUrls": ["https://protonvpn.com/", "https://proton.me/vpn"]
+    }
+
+  ]
+}

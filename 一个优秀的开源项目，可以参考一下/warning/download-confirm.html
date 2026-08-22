@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>下载风险确认 - 银狐木马检测</title>
+  <link rel="stylesheet" href="download-confirm.css">
+</head>
+<body>
+  <div class="confirm-container">
+    <!-- 顶部标题 -->
+    <div class="confirm-header">
+      <div class="confirm-icon">
+        <svg viewBox="0 0 24 24" width="36" height="36">
+          <path d="M12 2L1 22h22L12 2z" fill="#fff" opacity=".95"/>
+          <path d="M12 9v5M12 17.5v.5" stroke="#E65100" stroke-width="2.5" stroke-linecap="round"/>
+        </svg>
+      </div>
+      <h1>下载风险确认</h1>
+      <p class="confirm-subtitle">银狐木马检测系统</p>
+    </div>
+
+    <!-- 风险摘要 -->
+    <div class="risk-summary">
+      <div class="risk-badge danger">
+        <span class="risk-label">风险评分</span>
+        <span class="risk-score" id="risk-score">--</span>
+      </div>
+      <div class="risk-message">
+        <strong>该网站被识别为疑似钓鱼/恶意网站！</strong>
+        <p>您即将下载压缩包文件，请确认操作。</p>
+      </div>
+    </div>
+
+    <!-- 下载文件信息 -->
+    <div class="info-section">
+      <div class="info-row">
+        <span class="info-label">文件名称</span>
+        <span class="info-value" id="info-filename">--</span>
+      </div>
+      <div class="info-row">
+        <span class="info-label">下载来源</span>
+        <span class="info-value danger-text" id="info-download-domain">--</span>
+      </div>
+      <div class="info-row">
+        <span class="info-label">页面域名</span>
+        <span class="info-value" id="info-page-domain">--</span>
+      </div>
+    </div>
+
+    <!-- 官方网站链接（如有） -->
+    <div class="official-section" id="official-section" style="display:none;">
+      <div class="official-header">
+        <svg viewBox="0 0 20 20" width="16" height="16" style="vertical-align:middle;margin-right:4px;"><circle cx="10" cy="10" r="9" fill="#4CAF50"/><path d="M6 10l3 3 5-5" stroke="white" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        推荐的官方网站
+      </div>
+      <div class="official-domain" id="official-domain">--</div>
+      <a id="official-btn" class="btn-official" href="#" target="_blank">
+        前往官方网站
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:middle;margin-left:4px;"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+      </a>
+    </div>
+
+    <!-- 操作按钮 -->
+    <div class="actions">
+      <button id="btn-allow-once" class="btn-action btn-allow-once">
+        <span class="btn-icon">✅</span>
+        <span class="btn-content">
+          <span class="btn-title">仅此次放行</span>
+          <span class="btn-desc">重新发起本次下载，下次仍需确认</span>
+        </span>
+      </button>
+
+      <button id="btn-trust-site" class="btn-action btn-trust-site">
+        <span class="btn-icon">⭐</span>
+        <span class="btn-content">
+          <span class="btn-title">信任此网站并放行</span>
+          <span class="btn-desc" id="trust-desc">将该网站加入白名单，此后不再拦截</span>
+        </span>
+      </button>
+
+      <button id="btn-block-blacklist" class="btn-action btn-block">
+        <span class="btn-icon">🛑</span>
+        <span class="btn-content">
+          <span class="btn-title">拦截并拉黑下载来源</span>
+          <span class="btn-desc" id="block-desc">将此下载域名标记为恶意，跨站免疫</span>
+        </span>
+      </button>
+    </div>
+
+    <!-- 安全提示 -->
+    <div class="tips-section">
+      <p>💡 <strong>建议：</strong>通过官方网站或应用商店下载软件，避免从不明来源获取文件。</p>
+    </div>
+
+    <!-- 底部关闭 -->
+    <p class="auto-close-hint" id="auto-close-hint"></p>
+  </div>
+
+  <script type="module" src="download-confirm.js"></script>
+</body>
+</html>

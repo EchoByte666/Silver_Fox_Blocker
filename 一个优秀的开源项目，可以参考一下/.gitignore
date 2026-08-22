@@ -1,0 +1,22 @@
+# Cache files
+.cache/
+
+# IDE settings (optional, remove if you want to share VSCode config)
+# .vscode/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Archive files
+*.zip
+*.rar
+
+# Test log files
+VirusDetectorLog/
+VirusDetectorDevFile/
+AUDIT_REPORT.md
+
+# node modules
+node_modules/
+dist/

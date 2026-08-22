@@ -697,6 +697,11 @@ async function enhanceScoreAsync(tabId, url, result) {
 function applyBrandCheck(result, url) {
   let hostname;
   try { hostname = new URL(url).hostname.toLowerCase(); } catch(e) { return result; }
+  // v2.1.5：开发者平台豁免（与 content.js 同名表两处同步）——
+  // 平台页面对品牌的提及是文档/讨论语境而非冒充，整体跳过补检
+  if (DEVELOPER_PLATFORM_DOMAINS.some(function(platformDomain) {
+    return hostname === platformDomain || hostname.endsWith('.' + platformDomain);
+  })) return result;
   const title = String(result.title || '').toLowerCase().replace(/\s+/g, '');
   const brandHint = String(result.brand || '').toLowerCase().replace(/\s+/g, '');
   let matchedBrand = null;
@@ -800,6 +805,20 @@ function applyBrandCheck(result, url) {
   return result;
 }
 
+// v2.1.5 新增：开发者平台豁免表（品牌冒充检测专用）。
+// 代码托管/技术问答/文档站的页面天然高频提及各软件品牌（README、
+// 评测对比、API 文档），"提及"≠"冒充"。hostname 命中本表（含子域名）
+// 时跳过全部品牌冒充类指标：content.js 评分阶段不产生 brandMatch，
+// background 二次核查（applyBrandCheck）直接放行。
+// 注意：content.js 中有相同列表，修改时需两处同步。
+const DEVELOPER_PLATFORM_DOMAINS = [
+  'github.com', 'github.io', 'gitlab.com', 'gitee.com', 'bitbucket.org',
+  'sourceforge.net', 'stackoverflow.com', 'stackexchange.com', 'npmjs.com',
+  'pypi.org', 'crates.io', 'pkg.go.dev', 'csdn.net', 'juejin.cn',
+  'cnblogs.com', 'segmentfault.com', 'oschina.net', 'zhihu.com',
+  'jianshu.com', 'v2ex.com', 'mozilla.org'
+];
+
 // ===== 品牌关键词本地修正表（v2.1.0 新增）=====
 // 远程品牌库的关键词可能过泛，导致正规网站被误判品牌冒充。典型案例：
 // 腾讯电脑管家的远程关键词是"电脑管家"——这是一个半通用词，
@@ -809,8 +828,20 @@ function applyBrandCheck(result, url) {
 // 此表按品牌名覆盖关键词列表：只影响本地匹配语义，不改动远程数据；
 // 冒充站几乎必然在标题中使用完整品牌名（其目的就是蹭全名搜索流量），
 // 收紧为全名匹配不会漏掉真实冒充站。新增误报在此追加即可。
+//
+// v2.1.5 补充：为什么内置 brands.json 洗了关键词还要在此覆盖——
+// mergeBrandConfig 对同名牌的 keywords 取"内置 ∪ 远程"并集，远程源若
+// 仍带旧泛词（如 Google Chrome 的 "google"/"谷歌"、Clash Verge 的
+// "clash"），并集会把洗掉的词重新引入。修正表在合并之后执行、整表
+// 替换 keywords，是唯一能压过远程脏数据的关口
 const BRAND_KEYWORD_OVERRIDES = {
-  '腾讯电脑管家': ['腾讯电脑管家', '腾讯管家']
+  '腾讯电脑管家': ['腾讯电脑管家', '腾讯管家'],
+  // 公司级泛词不得用于产品冒充判定：任何提到 Google 的页面（含 *.google
+  // 官方域之外的合法提及）都会被判"冒充 Chrome"；实测 antigravity.google
+  // 曾因 hostname 含 "google" 触发域名仿冒强特征被硬拦
+  'Google Chrome': ['chrome', '谷歌浏览器', '谷歌chrome'],
+  // "clash" 是普通英文单词，新闻/游戏语境高频出现，单独成词误报面过大
+  'Clash Verge': ['clash verge', 'clashverge']
 };
 
 // 对品牌规则数组应用本地关键词修正（返回新数组，不改动入参）

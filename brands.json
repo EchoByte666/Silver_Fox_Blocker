@@ -15,27 +15,27 @@
     {
       "name": "网易UU远程",
       "keywords": ["UU远程", "网易UU远程"],
-      "officialDomains": ["uuyc.163.com"],
+      "officialDomains": ["uuyc.163.com", "163.com"],
       "trustedDomains": ["apps.microsoft.com"],
       "officialUrls": ["https://uuyc.163.com/"]
     },
     {
       "name": "贝锐向日葵远程控制软件",
-      "keywords": ["向日葵远程", "向日葵远程"],
+      "keywords": ["向日葵远程", "sunlogin"],
       "officialDomains": ["oray.com"],
       "trustedDomains": ["apps.microsoft.com"],
       "officialUrls": ["https://sunlogin.oray.com/"]
     },
     {
       "name": "Google Chrome",
-      "keywords": ["chrome","google","谷歌","谷歌浏览器"],
-      "officialDomains": ["google.com", "google.cn"],
+      "keywords": ["chrome", "谷歌浏览器", "谷歌chrome"],
+      "officialDomains": ["google.com", "google.cn", "google", "chromium.org"],
       "officialUrls": ["https://www.google.cn/chrome/","https://www.google.com/chrome/"]
     },
     {
       "name": "Firefox",
       "keywords": ["Firefox", "火狐"],
-      "officialDomains": ["firefox.com"],
+      "officialDomains": ["firefox.com", "firefox.com.cn", "mozilla.org"],
       "officialUrls": ["https://www.firefox.com/zh-CN/"]
     },
     {
@@ -102,7 +102,7 @@
     },
     {
       "name": "Clash Verge",
-      "keywords": ["Clash Verge", "clash verge","Clash","clash"],
+      "keywords": ["Clash Verge", "clash verge"],
       "officialDomains": ["github.com"],
       "trustedDomains": ["apps.microsoft.com"],
       "officialUrls": ["https://github.com/Clash-Verge-rev/clash-verge-rev"]

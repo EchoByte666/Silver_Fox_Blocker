@@ -61,6 +61,19 @@ function isGovCnHostname(hostname) {
   return hostname === 'gov.cn' || hostname.endsWith('.gov.cn');
 }
 
+// v2.1.5 新增：开发者平台豁免表（品牌冒充检测专用）。
+// 代码托管/技术问答/文档站的页面天然高频提及各软件品牌（README、
+// 评测对比、API 文档），"提及"≠"冒充"。hostname 命中本表（含子域名）
+// 时跳过品牌匹配，全部 brand 类指标随之失效。
+// 注意：background.js 中有相同列表（applyBrandCheck 用），修改时需两处同步
+const DEVELOPER_PLATFORM_DOMAINS = [
+  'github.com', 'github.io', 'gitlab.com', 'gitee.com', 'bitbucket.org',
+  'sourceforge.net', 'stackoverflow.com', 'stackexchange.com', 'npmjs.com',
+  'pypi.org', 'crates.io', 'pkg.go.dev', 'csdn.net', 'juejin.cn',
+  'cnblogs.com', 'segmentfault.com', 'oschina.net', 'zhihu.com',
+  'jianshu.com', 'v2ex.com', 'mozilla.org'
+];
+
 // ===== v2.1.0：官方标识检测（降误报核心）=====
 // 检测页面是否挂有"党政机关/事业单位"官方标识——此类标识由机构申请并
 // 挂载在页脚（典型形态见 CONAC 全国党政机关事业单位互联网网站标识：
@@ -1360,21 +1373,43 @@ function readCachedRules() {
 
     // ---- 品牌匹配计算（提前于依赖它的指标，修复 2.0.0 中的顺序缺陷） ----
     // 标题/meta/主标题命中品牌关键词，且域名既非官方域也非可信分发域 → 判定品牌冒充
+    // v2.1.5 分层语料改造：
+    //   1) 语料按位置拆分并加分隔符合并——title / h1 / meta 各自规范化后
+    //      以 '|' 拼接，防止跨边界子串误命中（旧版直接空格拼接去空白，
+    //      title 尾词与 meta 首词会粘成一个假词）
+    //   2) 记录命中档位 brandHitTier：标题 <title> 命中 → 3（高档）；
+    //      页面主标题 h1 命中 → 2（中档）；仅 SEO 元数据命中 → 1（低档）。
+    //      brandMismatch 按档位计 30/20/10 分——仿冒站靠蹭搜索流量生存，
+    //      必然把完整品牌名写进 <title>；正文文档/报道只在 meta 或 h1
+    //      提及品牌的页面不构成同等冒充证据
     var titleText = document.title || '';
     var brandMatch = null;
     var trustedDistributor = null;
     var primaryHeading = document.querySelector('h1');
-    var normalizedPrimaryBrandText = (titleText + ' ' + metaText + ' ' +
-      String(primaryHeading && primaryHeading.innerText || '')).toLowerCase().replace(/\s+/g, '');
+    function normalizeBrandText(value) {
+      return String(value || '').toLowerCase().replace(/\s+/g, '');
+    }
+    var normalizedTitleBrandText = normalizeBrandText(titleText);
+    var normalizedMetaBrandText = normalizeBrandText(metaText);
+    var normalizedHeadingBrandText = normalizeBrandText(primaryHeading && primaryHeading.innerText || '');
     function matchesBrand(rule, haystack) {
       return (rule.keywords || []).some(function(keyword) {
         var normalizedKeyword = String(keyword).toLowerCase().replace(/\s+/g, '');
         return haystack.includes(normalizedKeyword);
       });
     }
-    var matchedBrandRule = brandConfig.find(function(rule) {
-      return matchesBrand(rule, normalizedPrimaryBrandText);
+    var combinedBrandText = normalizedTitleBrandText + '|' +
+      normalizedHeadingBrandText + '|' + normalizedMetaBrandText;
+    // v2.1.5：开发者平台豁免（与 background.js 同名表两处同步）——
+    // 平台页面提及品牌是文档/讨论语境，跳过匹配使全部 brand 类指标失效
+    var isDeveloperPlatform = DEVELOPER_PLATFORM_DOMAINS.some(function(platformDomain) {
+      return host === platformDomain || host.endsWith('.' + platformDomain);
     });
+    var matchedBrandRule = isDeveloperPlatform ? null : brandConfig.find(function(rule) {
+      return matchesBrand(rule, combinedBrandText);
+    });
+    // 命中档位：3=页面标题 / 2=h1 主标题 / 1=仅 SEO 元数据
+    var brandHitTier = 0;
     if (matchedBrandRule) {
       var rule = matchedBrandRule;
       var official = (rule.officialDomains || []).some(function(domain) {
@@ -1386,7 +1421,12 @@ function readCachedRules() {
         return host === domain || host.endsWith('.' + domain);
       });
       if (trusted) trustedDistributor = rule;
-      else if (!official) brandMatch = rule;
+      else if (!official) {
+        brandMatch = rule;
+        if (matchesBrand(rule, normalizedTitleBrandText)) brandHitTier = 3;
+        else if (matchesBrand(rule, normalizedHeadingBrandText)) brandHitTier = 2;
+        else brandHitTier = 1;
+      }
     }
 
     // v2.1.2 强信号 A（漏报修复）+ v2.1.3 模糊匹配增强：域名品牌词仿冒。
@@ -1519,9 +1559,16 @@ function readCachedRules() {
     // 品牌可信应用商店分发（-50，负分抵扣，显著降低误报）
     add('trustedDistributor', '品牌可信应用商店分发', -50, !!trustedDistributor,
       trustedDistributor ? trustedDistributor.name + ' + ' + host : '');
-    // 品牌冒充（+30）
-    add('brandMismatch', '软件品牌与官网域名不匹配', 30,
-      !softwareCatalog && !!brandMatch, brandMatch ? brandMatch.name : '', 'brand');
+    // 品牌冒充（v2.1.5 按命中档位计分：标题 30 / h1 主标题 20 / 仅 SEO 元数据 10）。
+    // 后台二次核查（applyBrandCheck）只看得到 <title>，其补检恒为高档 30 分，
+    // 与本表最高档一致；content 已检出时后台不重复加分，低档结论得以保留
+    var BRAND_TIER_POINTS = [0, 10, 20, 30];
+    var BRAND_TIER_LABELS = ['', 'SEO 元数据命中', 'h1 主标题命中', '页面标题命中'];
+    add('brandMismatch', '软件品牌与官网域名不匹配', BRAND_TIER_POINTS[brandHitTier] || 0,
+      !softwareCatalog && !!brandMatch,
+      brandMatch ? brandMatch.name +
+        (BRAND_TIER_LABELS[brandHitTier] ? '（' + BRAND_TIER_LABELS[brandHitTier] + '）' : '') : '',
+      'brand');
     // v2.1.2：域名品牌词仿冒（+30，brand 类）——计入强信号直接硬拦，
     // 典型案例 huorongaq.com（含 "huorong" 非官方域，页面冒充火绒安全）
     add('domainBrandImpersonation', '域名仿冒品牌关键词', 30,

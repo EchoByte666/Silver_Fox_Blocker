@@ -140,11 +140,19 @@ function renderScore(result) {
   });
 }
 
-// ===== v2.1.3：域名情报（域龄 + ICP 备案）查询与增强渲染 =====
-// popup 打开时自动查询当前页域名年龄（RDAP）；仅当页面声明了合规
-// 备案号时才查 ICP 备案 API，查询期间在评分明细底部显示加载动画。
+// ===== 域名情报（域龄 + ICP 备案）查询与增强渲染 =====
+// popup 打开时自动查询当前页域名年龄（v2.1.4 多源：RDAP → WhoDat →
+// whoisjs 兜底链）；仅当页面声明了合规备案号时才查 ICP 备案 API，
+// 查询期间在评分明细底部显示加载动画。
 // 增强分与 background enhanceScoreAsync 同规则计入总分显示：
 //   域龄 <30 天 +40 / 30~90 天 +20；页面声明备案但 API 查无 +20
+
+// v2.1.4：域龄数据源标识 → 展示用"查询依据"文案（与实际命中源一致）
+function ageSourceText(source) {
+  if (source === 'rdap') return 'RDAP 查询';
+  if (source === 'whodat' || source === 'whoisjs') return 'WHOIS 查询';
+  return '在线查询';
+}
 
 // 追加"查询中"动画行（loadCurrentScore 渲染完基础评分后立即调用）
 function appendIntelLoading(icpClaimed) {
@@ -171,12 +179,12 @@ function renderIntel(intel, baseTotal, threshold, icpClaimed) {
 
   const header = document.createElement('div');
   header.className = 'intel-header';
-  header.textContent = '域名情报增强（RDAP 域龄 + ICP 备案核验）';
+  header.textContent = '域名情报增强（域龄多源查询 + ICP 备案核验）';
   container.appendChild(header);
 
   let bonus = 0; // 增强分累计（与 enhanceScoreAsync 规则一致）
 
-  // --- 增强项 1：域名年龄 ---
+  // --- 增强项 1：域名年龄（v2.1.4：文案标注实际命中源）---
   const ageRow = document.createElement('div');
   ageRow.className = 'score-item';
   const ageLabel = document.createElement('span');
@@ -184,30 +192,31 @@ function renderIntel(intel, baseTotal, threshold, icpClaimed) {
   const agePoints = document.createElement('span');
   agePoints.className = 'score-points';
   const days = intel.creationDays;
+  const sourceTag = '（' + ageSourceText(intel.ageSource) + '）';
   if (intel.ageUnsupported) {
-    // .cn 等无公开 RDAP 的 TLD：显示为参考信息，不计分
-    ageLabel.textContent = '域名年龄 · 该顶级域不支持 RDAP 查询';
+    // 预留分支：v2.1.3 起的 unsupported 标记（现仅防御性保留）
+    ageLabel.textContent = '域名年龄 · 该顶级域不支持在线查询';
     agePoints.className += ' ';
     agePoints.textContent = '—';
   } else if (days >= 0 && days < 30) {
     bonus += 40;
     ageRow.classList.add('hit');
-    ageLabel.textContent = '新注册域名 · 注册仅 ' + days + ' 天（RDAP 查询）';
+    ageLabel.textContent = '新注册域名 · 注册仅 ' + days + ' 天' + sourceTag;
     agePoints.classList.add('positive');
     agePoints.textContent = '+40';
   } else if (days >= 30 && days < 90) {
     bonus += 20;
     ageRow.classList.add('hit');
-    ageLabel.textContent = '近期注册域名 · 注册 ' + days + ' 天（RDAP 查询）';
+    ageLabel.textContent = '近期注册域名 · 注册 ' + days + ' 天' + sourceTag;
     agePoints.classList.add('positive');
     agePoints.textContent = '+20';
   } else if (days >= 90) {
     // 老域名：安全参考信息，不计分
-    ageLabel.textContent = '域名年龄 · 注册 ' + days + ' 天（RDAP 查询）';
+    ageLabel.textContent = '域名年龄 · 注册 ' + days + ' 天' + sourceTag;
     agePoints.textContent = '0';
   } else {
-    // creationDays = -1：查询失败
-    ageLabel.textContent = '域名年龄 · 查询失败（RDAP）';
+    // creationDays = -1：全部数据源查询失败
+    ageLabel.textContent = '域名年龄 · 查询失败（所有数据源）';
     agePoints.textContent = '—';
   }
   ageRow.appendChild(ageLabel);

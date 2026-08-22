@@ -266,6 +266,19 @@ function levenshteinWithin1(a, b) {
 // 触发条件：总分 ≥60（有基础风险才值得花网络请求）且未走硬拦截路径。
 // 升级规则：增强后总分 ≥150 且证据类别 ≥2 → 执行硬拦截（跳警告页）。
 // 失败安全：任一数据源查询失败不影响原决策（增强只加风险分不减）。
+//
+// v2.1.4 多源备援扩充（全部免费、无需登录，2026-08 实测可用）：
+//   域名年龄五通道：
+//     A. IANA RDAP 引导文件 → 权威注册局服务器（主通道）
+//     B. 硬编码常用 TLD 的 RDAP 表（IANA 不可达时）
+//     C. rdap.org 通用重定向器（按 TLD 302 跳权威服务器，兜住表外 TLD）
+//     D. WhoDat（who-dat.as93.net，结构化 WHOIS JSON，覆盖 .cn/.com.cn
+//        等 CNNIC 无公开 RDAP 的空档——此前这些域完全放弃域龄检测）
+//     E. whoisjs.com（原文 WHOIS 文本正则提取注册时间，末位兜底）
+//   ICP 备案：
+//     uapis.cn（HTTP 404 + code NOT_FOUND = 明确无备案结论）
+//     apihz.cn 公共源（公共 ID 全网共享限频极严——限频响应同为 code 400，
+//     故仅采信"code 200 且备案号合规"的正面证据，杜绝把限频误判为无备案）
 
 const V213_DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -280,24 +293,31 @@ function getRegistrableDomain(hostname) {
   return labels.slice(labels.length > cut ? -cut - 1 : 0).join('.');
 }
 
-// --- RDAP 客户端（精简版）---
-// IANA 引导文件（TLD → RDAP 服务器映射）24h 缓存；下载失败回退硬编码常用 gTLD；
-// .cn 无公开 RDAP（CNNIC 未提供），直接跳过不打无效请求
+// --- RDAP 客户端（精简版，v2.1.4 扩充备援）---
+// 解析顺序：IANA 引导文件（TLD → RDAP 服务器映射，24h 缓存）→ 硬编码
+// 常用 gTLD 回退表 → rdap.org 通用重定向器（302 跳权威服务器，实测可用，
+// 兜住引导文件不可达与表外 TLD）。.cn 无公开 RDAP（IANA 引导无 cn 条目，
+// rdap.org 对 .cn 实测 404），跳过 RDAP 直接走 DOMAIN_AGE_WHOIS_PROVIDERS 兜底链
 const RDAP_BOOTSTRAP_URL = 'https://data.iana.org/rdap/dns.json';
 const RDAP_FALLBACK_SERVERS = {
   'com': 'https://rdap.verisign.com/com/v1/',
   'net': 'https://rdap.verisign.com/net/v1/',
   'org': 'https://rdap.publicinterestregistry.org/rdap/',
   'info': 'https://rdap.identitydigital.services/rdap/',
+  'io': 'https://rdap.identitydigital.services/rdap/',
   'biz': 'https://rdap.nic.biz/',
   'tv': 'https://rdap.nic.tv/',
   'cc': 'https://tld-rdap.verisign.com/cc/v1/',
   'xyz': 'https://rdap.centralnic.com/xyz/',
   'top': 'https://rdap.zdnsgtld.com/top/',
+  'co': 'https://rdap.nic.co/',
+  'me': 'https://rdap.nic.me/',
   'app': 'https://pubapi.registry.google/rdap/',
   'dev': 'https://pubapi.registry.google/rdap/'
 };
 const NO_RDAP_TLDS = new Set(['cn']);
+// v2.1.4 新增：通用 RDAP 重定向器——专用服务器查不到时的最终兜底
+const RDAP_UNIVERSAL_BASE = 'https://rdap.org/';
 let _rdapBootstrap = null;      // { tldToServer: Map, ts }
 let _rdapBootstrapPromise = null; // 互斥：防并发重复下载引导文件
 const _rdapResultCache = new Map(); // domain -> { creationDays, ts }
@@ -336,41 +356,132 @@ async function getRdapBootstrap() {
   return _rdapBootstrapPromise;
 }
 
-// 查询域名注册天数（域名年龄）。返回 { creationDays }：
-//   ≥0 = 注册天数；-1 = 不支持/查询失败（调用方按"无信息"处理，不加风险分）
+// v2.1.4 新增：RDAP 服务基址解析——IANA 引导优先；引导内无此 TLD 或
+// 引导异常时回退 rdap.org 通用重定向器（fetch 自动跟随其 302 跳转）
+async function resolveRdapBase(tld) {
+  try {
+    const boot = await getRdapBootstrap();
+    const base = boot.tldToServer.get(tld);
+    if (base) return base;
+  } catch(e) { /* 引导异常：走通用重定向器 */ }
+  return RDAP_UNIVERSAL_BASE;
+}
+
+// v2.1.4 新增：ISO 时间字符串 → 距今天数（无效输入返回 -1）
+function daysSinceIso(iso) {
+  if (!iso) return -1;
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return -1;
+  return Math.max(0, Math.floor((Date.now() - d.getTime()) / V213_DAY_MS));
+}
+
+// v2.1.4 新增：RFC 9083 RDAP JSON → 注册天数
+//（events[eventAction=registration].eventDate），无注册事件返回 -1
+function parseRdapCreationDays(json) {
+  const reg = ((json && json.events) || []).find(function(e) {
+    return e && e.eventAction === 'registration';
+  });
+  return reg ? daysSinceIso(reg.eventDate) : -1;
+}
+
+// --- v2.1.4 新增：WHOIS 类域龄兜底源（免费、无需登录，实测可用）---
+// 定位：RDAP 主通道失败后的第二梯队，重点覆盖 .cn/.com.cn 等 CNNIC
+// 无公开 RDAP 的 TLD——此前这些域名直接放弃域龄检测。解析函数返回
+// 注册天数（≥0 有效）或 null（本源无结论，继续下一个源）
+const DOMAIN_AGE_WHOIS_PROVIDERS = [
+  {
+    // WhoDat：开源 WHOIS JSON API，结构化 dates.created（ISO 8601），
+    // 未注册域名返回 isRegistered:false（负样本形态明确）
+    name: 'whodat',
+    buildUrl: function(domain) {
+      return 'https://who-dat.as93.net/' + encodeURIComponent(domain);
+    },
+    parse: function(data) {
+      if (!data || typeof data !== 'object') return null;
+      if (data.isRegistered === false) return null;   // 未注册：无域龄可算
+      if (!data.isRegistered) return null;            // 字段缺失：不采信
+      return data.dates ? daysSinceIso(data.dates.created) : null;
+    }
+  },
+  {
+    // whoisjs：原文 WHOIS 文本兜底。.cn 系格式为 "Registration Time:"，
+    // gTLD 格式为 "Creation Date:"，两种都试（仅接受 YYYY-MM-DD 日期形态，
+    // 避免误抓无关行）
+    name: 'whoisjs',
+    buildUrl: function(domain) {
+      return 'https://whoisjs.com/api/v1/' + encodeURIComponent(domain);
+    },
+    parse: function(data) {
+      if (!data || data.success !== true) return null;
+      const raw = String(data.raw || '');
+      let m = raw.match(/Registration Time:\s*(\d{4}-\d{2}-\d{2})/i) ||
+        raw.match(/Creation Date:\s*(\d{4}-\d{2}-\d{2})/i);
+      return m ? daysSinceIso(m[1]) : null;
+    }
+  }
+];
+
+// 查询域名注册天数（域名年龄）。返回 { creationDays, source? }：
+//   ≥0 = 注册天数；-1 = 查询失败（调用方按"无信息"处理，不加风险分）。
+//   source 为命中源标识（rdap / whodat / whoisjs），供证据文案标注查询依据。
+// 通道顺序：RDAP（IANA 引导 → 硬编码表 → rdap.org）→ WhoDat → whoisjs；
+// 仅缓存成功结论（24h）；全部失败按"无信息"处理且不写长缓存（下次再试）
 async function queryDomainAge(domain) {
   const key = String(domain || '').toLowerCase();
   if (!key) return { creationDays: -1 };
   const cached = _rdapResultCache.get(key);
   if (cached && Date.now() - cached.ts < V213_DAY_MS) return cached;
   const tld = key.split('.').pop();
-  if (NO_RDAP_TLDS.has(tld)) return { creationDays: -1, unsupported: true };
-  try {
-    const boot = await getRdapBootstrap();
-    const base = boot.tldToServer.get(tld);
-    if (!base) return { creationDays: -1, unsupported: true };
-    const controller = new AbortController();
-    const timer = setTimeout(function() { controller.abort(); }, 8000);
-    const resp = await fetch(base + 'domain/' + encodeURIComponent(key), {
-      signal: controller.signal,
-      headers: { 'Accept': 'application/rdap+json, application/json' }
-    });
-    clearTimeout(timer);
-    if (!resp.ok) return { creationDays: -1 };
-    const json = await resp.json();
-    // RFC 9083：events[eventAction=registration].eventDate = 域名注册时间
-    const reg = (json.events || []).find(function(e) { return e && e.eventAction === 'registration'; });
-    let days = -1;
-    if (reg && reg.eventDate) {
-      const d = new Date(reg.eventDate);
-      if (!isNaN(d.getTime())) days = Math.max(0, Math.floor((Date.now() - d.getTime()) / V213_DAY_MS));
-    }
-    const result = { creationDays: days, ts: Date.now() };
-    _rdapResultCache.set(key, result);
-    return result;
-  } catch(e) {
-    return { creationDays: -1 };
+
+  // 通道 A/B/C：RDAP 主链（.cn 系无公开 RDAP，直接落 WHOIS 兜底链）
+  if (!NO_RDAP_TLDS.has(tld)) {
+    try {
+      const base = await resolveRdapBase(tld);
+      if (base) {
+        const controller = new AbortController();
+        const timer = setTimeout(function() { controller.abort(); }, 8000);
+        const resp = await fetch(base + 'domain/' + encodeURIComponent(key), {
+          signal: controller.signal,
+          headers: { 'Accept': 'application/rdap+json, application/json' }
+        });
+        clearTimeout(timer);
+        if (resp.ok) {
+          try {
+            const days = parseRdapCreationDays(await resp.json());
+            if (days >= 0) {
+              const result = { creationDays: days, source: 'rdap', ts: Date.now() };
+              _rdapResultCache.set(key, result);
+              return result;
+            }
+          } catch(e) { /* JSON 解析异常 → 落兜底链 */ }
+        }
+      }
+    } catch(e) { /* RDAP 全链失败 → 落兜底链 */ }
   }
+
+  // 通道 D/E：WHOIS 兜底链（覆盖 .cn/.com.cn 与 RDAP 故障场景）
+  for (let i = 0; i < DOMAIN_AGE_WHOIS_PROVIDERS.length; i++) {
+    const provider = DOMAIN_AGE_WHOIS_PROVIDERS[i];
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(function() { controller.abort(); }, 8000);
+      const resp = await fetch(provider.buildUrl(key), { signal: controller.signal });
+      clearTimeout(timer);
+      if (!resp.ok) continue;
+      let data;
+      try { data = await resp.json(); } catch(e) { continue; }
+      const days = provider.parse(data);
+      if (days !== null && days >= 0) {
+        const result = { creationDays: days, source: provider.name, ts: Date.now() };
+        _rdapResultCache.set(key, result);
+        return result;
+      }
+    } catch(e) { continue; }
+  }
+
+  // 全部源失败：短时缓存 5 分钟防抖，返回"无信息"
+  _rdapResultCache.set(key, { creationDays: -1, ts: Date.now() - V213_DAY_MS + 5 * 60 * 1000 });
+  return { creationDays: -1 };
 }
 
 // --- ICP 备案查询 API（多源备援，参考 VirusDetector icp-api.js）---
@@ -383,30 +494,45 @@ const _icpResultCache = new Map(); // domain -> { queried, hasIcp, icpNumber, ts
 const ICP_API_PROVIDERS = [
   {
     name: 'uapis',
+    // v2.1.4：HTTP 404 也进入解析——实测无备案域名返回
+    // 404 + {"code":"NOT_FOUND","message":"No ICP record found."}，
+    // 属明确的"无备案"结论而非服务故障（须同时校验 JSON 结构防误判）
+    okStatuses: [404],
     buildUrl: function(domain) {
       return 'https://uapis.cn/api/v1/network/icp?domain=' + encodeURIComponent(domain);
     },
     parse: function(data) {
-      if (!data || !(data.code === 200 || data.code === '200')) return null;
+      if (!data || typeof data !== 'object') return null;
+      // v2.1.4：明确无备案信号（404 分支）——仅当 code 与 message
+      // 双重吻合才认定，接口下线/路径变更时的 HTML 错误页走 JSON 解析失败
+      if (data.code === 'NOT_FOUND') {
+        return /no icp record/i.test(String(data.message || ''))
+          ? { queried: true, hasIcp: false, icpNumber: '' }
+          : null;
+      }
+      if (!(data.code === 200 || data.code === '200')) return null;
       const lic = typeof data.serviceLicence === 'string' ? data.serviceLicence.trim() : '';
       const isReal = /ICP[备证]/.test(lic);
       return { queried: true, hasIcp: isReal, icpNumber: isReal ? lic : '' };
     }
   },
   {
+    // v2.1.4 重要修正：apihz 公共 ID（88888888）全网共享，限频响应与
+    // 业务失败同为 code 400——旧解析把 400 一律当作"明确无备案"，
+    // 限频窗口内会给声明了备案的正规站误加"伪造备案"20 分。
+    // 现改为仅采信正面证据：code 200 且备案号含"ICP备/ICP证"才出结论，
+    // 其余一律返回 null（无结论，继续下一源），宁缺勿错
     name: 'apihz',
     buildUrl: function(domain) {
       return 'https://cn.apihz.cn/api/wangzhan/icp.php?id=88888888&key=88888888&domain=' +
         encodeURIComponent(domain);
     },
     parse: function(data) {
-      if (!data) return null;
-      const code = data.code;
-      // 200=有备案结论；400=明确无备案——均属有效查询响应
-      if (!(code === 200 || code === '200' || code === 400 || code === '400')) return null;
+      if (!data || typeof data !== 'object') return null;
+      if (!(data.code === 200 || data.code === '200')) return null;
       const lic = typeof data.icp === 'string' ? data.icp.trim() : '';
       const isReal = /ICP[备证]/.test(lic);
-      return { queried: true, hasIcp: isReal, icpNumber: isReal ? lic : '' };
+      return isReal ? { queried: true, hasIcp: true, icpNumber: lic } : null;
     }
   }
 ];
@@ -424,7 +550,11 @@ async function queryIcpRecord(domain) {
       const timer = setTimeout(function() { controller.abort(); }, 8000);
       const resp = await fetch(provider.buildUrl(key), { signal: controller.signal });
       clearTimeout(timer);
-      if (!resp.ok) continue;
+      // v2.1.4：okStatuses 允许个别源的非 2xx 状态进入解析
+      //（如 uapis 的 404=明确无备案），其余非 2xx 一律跳过该源
+      const accepted = resp.ok ||
+        (Array.isArray(provider.okStatuses) && provider.okStatuses.indexOf(resp.status) !== -1);
+      if (!accepted) continue;
       let data;
       try { data = await resp.json(); } catch(e) { continue; }
       const parsed = provider.parse(data);
@@ -481,18 +611,21 @@ async function enhanceScoreAsync(tabId, url, result) {
     const catSet = new Set(Array.isArray(result.categoriesList) ? result.categoriesList : []);
     let enhancedTotal = Number(result.total) || 0;
 
-    // 增强 1：新注册域名（domain 类证据）
+    // 增强 1：新注册域名（domain 类证据）。
+    // v2.1.4：证据文案按实际命中的数据源标注查询依据（RDAP/WHOIS），
+    // 与"拦截文案准确反映检测依据"的项目原则一致
     const days = ageInfo.creationDays;
+    const ageSourceLabel = ageInfo.source === 'rdap' ? 'RDAP 查询' : 'WHOIS 查询';
     if (days >= 0 && days < 30) {
       enhancedTotal += 40;
       catSet.add('domain');
       details.push({ id: 'domainYoung', label: '新注册域名', points: 40, matched: true,
-        evidence: '注册仅 ' + days + ' 天（RDAP 查询）' });
+        evidence: '注册仅 ' + days + ' 天（' + ageSourceLabel + '）' });
     } else if (days >= 30 && days < 90) {
       enhancedTotal += 20;
       catSet.add('domain');
       details.push({ id: 'domainYoung', label: '近期注册域名', points: 20, matched: true,
-        evidence: '注册 ' + days + ' 天（RDAP 查询）' });
+        evidence: '注册 ' + days + ' 天（' + ageSourceLabel + '）' });
     }
 
     // 增强 2：伪造备案（structure 类证据）——页面声明了备案号但
@@ -1995,8 +2128,10 @@ chrome.runtime.onMessage.addListener(function(msg, sender, sendResponse) {
         sendResponse({
           ok: true,
           domain: domain,
-          // 域龄：-1 = 查询失败或不支持的 TLD（.cn 无公开 RDAP）
+          // 域龄：-1 = 全部数据源查询失败（v2.1.4 起含 WHOIS 兜底链）
           creationDays: ageInfo.creationDays,
+          // v2.1.4：命中的域龄数据源标识（rdap/whodat/whoisjs），popup 文案标注用
+          ageSource: ageInfo.source || '',
           ageUnsupported: !!ageInfo.unsupported,
           // 备案：skipped=页面无合规备案声明未发起查询；queried=false=API 不可用
           icpSkipped: !!icpInfo.skipped,

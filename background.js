@@ -826,11 +826,25 @@ const DEVELOPER_PLATFORM_DOMAINS = [
 // 搜索结果页的 <title> 必然包含用户查询词——搜"火绒官网下载"的百度页
 // 标题就是"火绒安全软件官网下载_百度搜索"，按品牌词匹配会被判
 // "非官方域上的品牌冒充"（误报）。命中本表（含子域名，如 cn.bing.com、
-// m.sm.cn）时与开发者平台同样跳过品牌冒充补检。
-// 注意：content.js 中有相同列表，修改时需两处同步。
+// m.sm.cn、search.yahoo.com）时与开发者平台同样跳过品牌冒充补检。
+// 覆盖范围：全球综合 / Yandex 系 / AI 搜索 / 中国大陆 / 日韩俄欧区域引擎。
+// 注意：content.js 中有相同列表，修改时需两处同步；
+// 新增条目须为搜索引擎方自营域名（豁免只跳过品牌评分层，
+// 黑名单/DNR 拦截层不受影响，误加自营域无放行恶意站风险）
 const SEARCH_ENGINE_DOMAINS = [
-  'baidu.com', 'google.com', 'bing.com', 'sogou.com', 'so.com',
-  'sm.cn', 'duckduckgo.com'
+  // 全球综合
+  'google.com', 'bing.com', 'duckduckgo.com', 'yahoo.com',
+  'ecosia.org', 'startpage.com', 'qwant.com', 'mojeek.com',
+  'kagi.com', 'lycos.com', 'ask.com', 'metager.de',
+  // Yandex 系：地区站的 ccTLD 后缀不同（.ru/.com.tr），一个后缀盖不全，逐个列出
+  'yandex.com', 'yandex.ru', 'yandex.com.tr', 'ya.ru',
+  // AI 搜索
+  'perplexity.ai', 'you.com', 'phind.com', 'search.brave.com', 'copilot.microsoft.com',
+  // 中国大陆
+  'baidu.com', 'sogou.com', 'so.com', 'sm.cn', 'chinaso.com', 'so.toutiao.com',
+  // 日韩俄欧区域引擎
+  'naver.com', 'daum.net', 'yahoo.co.jp', 'goo.ne.jp',
+  'go.mail.ru', 'rambler.ru', 'seznam.cz'
 ];
 
 // ===== 品牌关键词本地修正表（v2.1.0 新增）=====

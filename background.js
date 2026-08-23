@@ -697,10 +697,13 @@ async function enhanceScoreAsync(tabId, url, result) {
 function applyBrandCheck(result, url) {
   let hostname;
   try { hostname = new URL(url).hostname.toLowerCase(); } catch(e) { return result; }
-  // v2.1.5：开发者平台豁免（与 content.js 同名表两处同步）——
-  // 平台页面对品牌的提及是文档/讨论语境而非冒充，整体跳过补检
+  // v2.1.5：开发者平台与搜索引擎豁免（与 content.js 同名表两处同步）——
+  // 平台页面对品牌的提及是文档/讨论语境，搜索结果页标题必然包含用户
+  // 查询的品牌词，均为"提及"而非"冒充"，整体跳过补检
   if (DEVELOPER_PLATFORM_DOMAINS.some(function(platformDomain) {
     return hostname === platformDomain || hostname.endsWith('.' + platformDomain);
+  }) || SEARCH_ENGINE_DOMAINS.some(function(searchDomain) {
+    return hostname === searchDomain || hostname.endsWith('.' + searchDomain);
   })) return result;
   const title = String(result.title || '').toLowerCase().replace(/\s+/g, '');
   const brandHint = String(result.brand || '').toLowerCase().replace(/\s+/g, '');
@@ -817,6 +820,17 @@ const DEVELOPER_PLATFORM_DOMAINS = [
   'pypi.org', 'crates.io', 'pkg.go.dev', 'csdn.net', 'juejin.cn',
   'cnblogs.com', 'segmentfault.com', 'oschina.net', 'zhihu.com',
   'jianshu.com', 'v2ex.com', 'mozilla.org'
+];
+
+// v2.1.5 新增：搜索引擎豁免表（品牌冒充检测专用）。
+// 搜索结果页的 <title> 必然包含用户查询词——搜"火绒官网下载"的百度页
+// 标题就是"火绒安全软件官网下载_百度搜索"，按品牌词匹配会被判
+// "非官方域上的品牌冒充"（误报）。命中本表（含子域名，如 cn.bing.com、
+// m.sm.cn）时与开发者平台同样跳过品牌冒充补检。
+// 注意：content.js 中有相同列表，修改时需两处同步。
+const SEARCH_ENGINE_DOMAINS = [
+  'baidu.com', 'google.com', 'bing.com', 'sogou.com', 'so.com',
+  'sm.cn', 'duckduckgo.com'
 ];
 
 // ===== 品牌关键词本地修正表（v2.1.0 新增）=====

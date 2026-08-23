@@ -74,6 +74,17 @@ const DEVELOPER_PLATFORM_DOMAINS = [
   'jianshu.com', 'v2ex.com', 'mozilla.org'
 ];
 
+// v2.1.5 新增：搜索引擎豁免表（品牌冒充检测专用）。
+// 搜索结果页的 <title> 必然包含用户查询词——搜"火绒官网下载"的百度页
+// 标题就是"火绒安全软件官网下载_百度搜索"，按品牌词匹配会被判
+// "非官方域上的品牌冒充"（误报）。命中本表（含子域名，如 cn.bing.com、
+// m.sm.cn）时与开发者平台同样跳过品牌匹配。
+// 注意：background.js 中有相同列表（applyBrandCheck 用），修改时需两处同步
+const SEARCH_ENGINE_DOMAINS = [
+  'baidu.com', 'google.com', 'bing.com', 'sogou.com', 'so.com',
+  'sm.cn', 'duckduckgo.com'
+];
+
 // ===== v2.1.0：官方标识检测（降误报核心）=====
 // 检测页面是否挂有"党政机关/事业单位"官方标识——此类标识由机构申请并
 // 挂载在页脚（典型形态见 CONAC 全国党政机关事业单位互联网网站标识：
@@ -1400,12 +1411,17 @@ function readCachedRules() {
     }
     var combinedBrandText = normalizedTitleBrandText + '|' +
       normalizedHeadingBrandText + '|' + normalizedMetaBrandText;
-    // v2.1.5：开发者平台豁免（与 background.js 同名表两处同步）——
-    // 平台页面提及品牌是文档/讨论语境，跳过匹配使全部 brand 类指标失效
+    // v2.1.5：开发者平台与搜索引擎豁免（两表均与 background.js 同名表
+    // 两处同步）——平台页面提及品牌是文档/讨论语境，搜索结果页标题
+    // 必然包含用户查询的品牌词，均为"提及"而非"冒充"，
+    // 命中任一豁免即跳过匹配，使全部 brand 类指标失效
     var isDeveloperPlatform = DEVELOPER_PLATFORM_DOMAINS.some(function(platformDomain) {
       return host === platformDomain || host.endsWith('.' + platformDomain);
     });
-    var matchedBrandRule = isDeveloperPlatform ? null : brandConfig.find(function(rule) {
+    var isSearchEngine = SEARCH_ENGINE_DOMAINS.some(function(searchDomain) {
+      return host === searchDomain || host.endsWith('.' + searchDomain);
+    });
+    var matchedBrandRule = (isDeveloperPlatform || isSearchEngine) ? null : brandConfig.find(function(rule) {
       return matchesBrand(rule, combinedBrandText);
     });
     // 命中档位：3=页面标题 / 2=h1 主标题 / 1=仅 SEO 元数据

@@ -605,9 +605,49 @@ function icpNumbersMatch(claimed, apiNumber) {
 // scorePage 同步回执发出后调用（不阻塞响应）。查域名年龄；
 // 仅当页面已声明合规备案号（icpClaimed）时才查 ICP API 核验备案。
 // v2.2.0：负分抵扣（备案核验一致 -80 / 老域名 -15）把总分拉回阈值以下时
-// 发 scoreDowngraded 消息回撤横幅/冻结；命中新增风险项且总分达硬拦截线
+// 通知 content 回撤横幅/冻结；命中新增风险项且总分达硬拦截线
 // → 执行拦截（复用 blockedInfo 机制，警告页可展示含增强明细的完整评分）
+// v2.2.2：扩展为升降级双向对账（scoreAdjusted 消息）——增强前后 UI 层级
+// 不一致即通知 content 调整，无论方向均伴随 Toast；增强结论缓存于
+// _enhancedVerdicts 供同步决策消费，消除重评闪烁
 const _enhanceInFlight = new Set();
+
+// ===== v2.2.2：增强终局结论缓存与 UI 层级判定 =====
+
+// 增强终局结论缓存（URL → 增强后总分与证据类别），作用有二：
+//   1) 同步决策消费——DOM 变化触发重评时 scorePage 直接采用增强后结论，
+//      避免每次都"按原始高分注入横幅 → 异步再回撤"的闪烁循环，
+//      页面刷新后也立即得到最终层级而非先展示过时结论；
+//   2) 对账去重——增强结论未变化时不重复发 scoreAdjusted / 弹 Toast
+const _enhancedVerdicts = new Map();
+const ENHANCED_VERDICT_TTL_MS = 30 * 60 * 1000;   // 30 分钟过期：过期后重新查询重算
+const ENHANCED_VERDICT_MAX = 200;                 // 容量上限（Map 保持插入序，淘汰最旧）
+
+function getEnhancedVerdict(url) {
+  const v = _enhancedVerdicts.get(url);
+  if (!v) return null;
+  if (Date.now() - v.ts > ENHANCED_VERDICT_TTL_MS) { _enhancedVerdicts.delete(url); return null; }
+  return v;
+}
+
+// UI 层级判定（与 scorePage 同步决策严格对齐，修改时两处同步）：
+//   warn   ≥100（是否冻结由 structure/resource 类证据另行决定）
+//   notice 80~99
+//   card   60~79 或存在品牌冒充嫌疑（!!result.brand 即嫌疑）
+//   clear  其余
+function uiLevelOf(total, brandSuspicion) {
+  if (total >= 100) return 'warn';
+  if (total >= 80) return 'notice';
+  if (total >= 60 || brandSuspicion) return 'card';
+  return 'clear';
+}
+
+// 品牌冒充嫌疑标记（与 scorePage 同步路径 hasBrandSuspicion 同义，两处同步）
+function hasBrandSuspicionFlag(result) {
+  return (Array.isArray(result.details) && result.details.some(
+    function(item) { return item.matched && item.points > 0 && item.id === 'domainBrandImpersonation'; })) ||
+    !!result.brand;
+}
 
 async function enhanceScoreAsync(tabId, url, result) {
   const key = tabId + ':' + url;
@@ -687,30 +727,57 @@ async function enhanceScoreAsync(tabId, url, result) {
     // v2.2.0：提前计算，避免同一页面既收到降级回撤又被跳警告页的矛盾决策
     const willUpgrade = enhancedTotal >= 150 && catSet.size >= 2;
 
-    // v2.2.0 回撤判定：同步决策先于增强数据返回，页面可能已按原始高分
-    // 注入警示横幅甚至冻结。负分抵扣（备案一致 -80 / 老域名 -15）把总分
-    // 拉回软拦截线以下时，通知 content 回撤横幅/卡片并解除冻结；
-    // 总分仍在 100 以上但已无结构性/资源类证据时降级为低权横幅。
-    // 仅在不会升级拦截时发送（升级时警告页本身即最终结论）
-    if (!willUpgrade && (Number(result.total) || 0) >= 100) {
-      const downgradedDetails = details.filter(function(item) { return item.matched; });
-      let level = '';
-      if (enhancedTotal < 100) level = 'clear';
-      else {
-        const stillHardEvidence = Array.from(catSet).some(function(c) {
-          return c === 'structure' || c === 'resource';
-        });
-        if (!stillHardEvidence) level = 'notice';
-      }
-      if (level) {
+    // v2.2.2：登记增强终局结论。verdictUnchanged 表示本轮结论与上轮一致——
+    // 同步决策已消费过该结论（getEnhancedVerdict），content 当前展示即最终
+    // 层级，无需再发对账消息重复打扰
+    const verdictUnchanged = (function() {
+      const prior = getEnhancedVerdict(url);
+      return !!prior && prior.total === enhancedTotal;
+    })();
+    _enhancedVerdicts.set(url, {
+      total: enhancedTotal,
+      categories: catSet.size,
+      categoriesList: Array.from(catSet),
+      ts: Date.now()
+    });
+    if (_enhancedVerdicts.size > ENHANCED_VERDICT_MAX) {
+      _enhancedVerdicts.delete(_enhancedVerdicts.keys().next().value);
+    }
+
+    // v2.2.2 升降级对账：同步决策先于增强数据返回，页面可能已按原始分数
+    // 注入横幅/卡片甚至冻结。增强后的 UI 层级与同步层级不一致且不会升级
+    // 硬拦截时，发 scoreAdjusted 让 content 把 UI 调整到目标层级——无论
+    // 升级还是回撤均伴随顶部 Toast。
+    // v2.2.1 缺陷修复：旧回撤仅在原始总分 ≥100 时触发，60~99 分的琥珀
+    // 卡片场景被遗漏（如评分 70 弹卡后备案核验一致 -80 → 卡片残留不消失）
+    if (!willUpgrade && !verdictUnchanged) {
+      const originalTotal = Number(result.total) || 0;
+      const brandSuspicion = hasBrandSuspicionFlag(result);
+      const syncLevel = uiLevelOf(originalTotal, brandSuspicion);
+      const enhancedLevel = uiLevelOf(enhancedTotal, brandSuspicion);
+      if (enhancedLevel !== syncLevel) {
+        const enhancedCatList = Array.from(catSet);
+        const hardEvidence = enhancedCatList.indexOf('structure') !== -1 ||
+          enhancedCatList.indexOf('resource') !== -1;
         try {
           chrome.tabs.sendMessage(tabId, {
-            action: 'scoreDowngraded', level: level,
-            total: enhancedTotal, details: downgradedDetails
+            action: 'scoreAdjusted',
+            fromLevel: syncLevel, level: enhancedLevel,
+            total: enhancedTotal, previousTotal: originalTotal,
+            details: details.filter(function(item) { return item.matched; }),
+            categoriesList: enhancedCatList,
+            // 目标为警示层时附带冻结指令（门槛与同步路径一致：
+            // structure/resource 类证据 + 不在解冻窗口期内）
+            freeze: enhancedLevel === 'warn' && hardEvidence && !isRecentlyUnfrozen(url),
+            // 卡片跟随规则与同步路径一致：card 层必有；notice/warn 层仅
+            // 纯高分达硬拦截线时叠加（legacyHit/strongSignal 在本路径恒 false）
+            card: enhancedLevel === 'card' ||
+              ((enhancedLevel === 'notice' || enhancedLevel === 'warn') && enhancedTotal >= 150)
           }, function() { void chrome.runtime.lastError; });
         } catch(e) { /* 页面可能已导航离开 */ }
-        debug('enhanceScoreAsync 评分回撤 tabId=' + tabId + ' level=' + level +
-          ' original=' + result.total + ' enhanced=' + enhancedTotal);
+        debug('enhanceScoreAsync 升降级对账 tabId=' + tabId +
+          ' ' + syncLevel + '→' + enhancedLevel +
+          ' original=' + originalTotal + ' enhanced=' + enhancedTotal);
       }
     }
 
@@ -2314,12 +2381,22 @@ chrome.runtime.onMessage.addListener(function(msg, sender, sendResponse) {
       // （症状：正规站已注入验证卡片，片刻后又被弹拦截页）。
       // pattern 的拦截决策已移交 handleNav/content 的官方标识检测通道
       const legacyHit = setMatches(blocklistSet, scoreHostname);
-      const totalScore = Number(result.total) || 0;
+      let totalScore = Number(result.total) || 0;
       const strongSignal = !!result.strongSignal;
-      const categoryCount = Number(result.categories) || 0;
+      let categoryCount = Number(result.categories) || 0;
       // v2.2.0：结构性/资源类证据标记——"过度危险"的判定基础。
       // structure=页面结构分发特征，resource=请求恶意资源
-      const categoriesList = Array.isArray(result.categoriesList) ? result.categoriesList : [];
+      let categoriesList = Array.isArray(result.categoriesList) ? result.categoriesList : [];
+      // v2.2.2：异步增强已有终局结论时直接采用——DOM 重评不再按原始分决策，
+      // 消除"注入横幅 → 异步回撤"的闪烁；页面刷新后也立即得到最终层级。
+      // 注意：仅覆盖分数与类别维度，品牌/官方标识等页面侧字段保持原值
+      const priorVerdict = getEnhancedVerdict(scoreUrl);
+      if (priorVerdict) {
+        totalScore = priorVerdict.total;
+        categoryCount = Number(priorVerdict.categories) || categoryCount;
+        if (Array.isArray(priorVerdict.categoriesList)) categoriesList = priorVerdict.categoriesList;
+        debug('scorePage 采用增强终局结论 total=' + totalScore + ' url=' + scoreUrl);
+      }
       const hasHardEvidence = categoriesList.indexOf('structure') !== -1 ||
         categoriesList.indexOf('resource') !== -1;
       // 硬拦截判定：黑名单 / 强特征 / 高分且证据多样。

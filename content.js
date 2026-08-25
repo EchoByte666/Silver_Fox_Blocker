@@ -767,15 +767,18 @@ function injectNoticeCard(result) {
   debug('content.js 低权琥珀卡片已注入（评分 ' + result.total + '）');
 }
 
-// ===== v2.2.1：评分回撤 Toast =====
-// 分数经异步核验（备案一致 -80 / 老域名 -15）跌破软拦截线后，
-// 用户此前看到的警示横幅/卡片/冻结会静默消失——缺少"为什么没了"的解释。
+// ===== v2.2.1 评分回撤 Toast / v2.2.2 扩展为升降级双向 Toast =====
+// 分数经异步核验（备案一致 -80 / 老域名 -15 等）变化导致 UI 层级调整时，
+// 横幅/卡片/冻结状态的切换若静默发生会让用户困惑（"警告怎么没了/怎么多了"）。
 // 本 Toast 补上这一环：页面顶部居中短暂提示（Shadow DOM 防伪造），
 // 6 秒自动消退，可点击立即关闭。
-//   level='clear' + 曾冻结 → "已解冻并刷新"
-//   level='clear'          → "已解除警示与限制"
-//   level='notice'         → "已降级为低权提示"
-function injectDowngradeToast(info) {
+// 方向与文案（direction 由对账层按层级升降判定）：
+//   down + clear + 曾冻结 → "已解冻并刷新"
+//   down + clear          → "已解除警示与限制"
+//   down + 其他           → "已降低提示等级"
+//   up  + warn            → "已升级为警示横幅（并冻结页面交互）"
+//   up  + notice/card     → 对应的升级说明
+function injectScoreChangeToast(info) {
   if (window.top !== window) return;
   if (!document.body) return;
   // 已有 Toast 在显示：移除旧的再注入新的（最新结论优先）
@@ -787,32 +790,53 @@ function injectDowngradeToast(info) {
   document.body.appendChild(host);
   var root = host.attachShadow({ mode: 'closed' });
   var total = Number(info && info.total) || 0;
+  var isUp = !!(info && info.direction === 'up');
   var text;
-  if (info && info.level === 'notice') {
-    text = '风险评分调整为 ' + total + '/150（未达拦截标准），已降级为低权提示';
-  } else if (info && info.wasFrozen) {
-    text = '风险评分已降至 ' + total + '/150，本页限制已解除，正在刷新页面…';
+  if (isUp) {
+    if (info.level === 'warn') {
+      text = '风险评分上调至 ' + total + '/150，已显示警示横幅' +
+        (info.frozen ? '并冻结页面交互，请谨慎操作' : '');
+    } else if (info.level === 'notice') {
+      text = '风险评分上调至 ' + total + '/150，已显示低权提示横幅';
+    } else {
+      text = '风险评分调整为 ' + total + '/150，已放行浏览——请核对官网后再下载文件或输入账号密码';
+    }
+  } else if (info && info.level === 'clear') {
+    if (info.wasFrozen) {
+      text = '风险评分已降至 ' + total + '/150，本页限制已解除，正在刷新页面…';
+    } else {
+      text = '风险评分已降至 ' + total + '/150，已解除本页警示与限制，可正常浏览';
+    }
   } else {
-    text = '风险评分已降至 ' + total + '/150，已解除本页警示与限制，可正常浏览';
+    text = '风险评分调整为 ' + total + '/150（未达拦截标准），已降低提示等级';
   }
+  // 升级=琥珀警示配色；降级=绿色解除配色
+  var bg = isUp ? 'rgba(255,251,235,0.97)' : 'rgba(236,253,245,0.97)';
+  var borderColor = isUp ? '#f59e0b' : '#34d399';
+  var shadowColor = isUp ? 'rgba(180,83,9,0.18)' : 'rgba(5,150,105,0.18)';
+  var iconColor = isUp ? '#b45309' : '#059669';
+  var textColor = isUp ? '#92400e' : '#065f46';
+  var iconSvg = isUp
+    ? '<svg class="icon" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>'
+    : '<svg class="icon" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>';
   root.innerHTML =
     '<style>' +
     ':host { position: fixed; top: 14px; left: 50%; transform: translateX(-50%);' +
     '  z-index: 2147483647; font-family: system-ui, "Microsoft YaHei", sans-serif; }' +
     '.toast { display: flex; align-items: center; gap: 8px; max-width: 480px;' +
     '  box-sizing: border-box; padding: 9px 14px;' +
-    '  background: rgba(236,253,245,0.97); border: 1px solid #34d399;' +
-    '  border-radius: 10px; box-shadow: 0 6px 22px rgba(5,150,105,0.18);' +
+    '  background: ' + bg + '; border: 1px solid ' + borderColor + ';' +
+    '  border-radius: 10px; box-shadow: 0 6px 22px ' + shadowColor + ';' +
     '  animation: toast-in .25s ease both, toast-out .4s ease 5.6s both;' +
     '  cursor: pointer; }' +
     '@keyframes toast-in { from { opacity: 0; transform: translateY(-8px); }' +
     '  to { opacity: 1; transform: none; } }' +
     '@keyframes toast-out { to { opacity: 0; transform: translateY(-8px); } }' +
-    '.icon { flex-shrink: 0; color: #059669; }' +
-    '.text { font-size: 12px; color: #065f46; line-height: 1.5; }' +
+    '.icon { flex-shrink: 0; color: ' + iconColor + '; }' +
+    '.text { font-size: 12px; color: ' + textColor + '; line-height: 1.5; }' +
     '</style>' +
     '<div class="toast" role="status">' +
-    '  <svg class="icon" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>' +
+    iconSvg +
     '  <span class="text">银狐拦截系统：' + text + '</span>' +
     '</div>';
   // 点击或动画结束（6s）后整体移除
@@ -820,27 +844,64 @@ function injectDowngradeToast(info) {
   function dismiss() { try { host.remove(); } catch(e) { /* */ } }
   if (toastEl) toastEl.addEventListener('click', dismiss);
   setTimeout(dismiss, 6000);
-  debug('content.js 评分回撤 Toast 已注入 level=' + (info && info.level));
+  debug('content.js 评分变化 Toast 已注入 dir=' + (isUp ? 'up' : 'down') +
+    ' level=' + (info && info.level));
 }
 
-// ===== v2.2.0：异步增强回撤（备案核验一致 -80 / 老域名抵扣 -15 后总分跌破阈值）=====
-// 同步决策先于增强数据返回：页面可能已按原始高分注入警示横幅甚至冻结。
-// 后台 enhanceScoreAsync 算出负分抵扣后的新总分低于阈值时发本消息回撤：
-//   level='clear'  → 移除全部横幅与卡片 + Toast 提示用户已解除；
-//                     若仍处冻结态则登记窗口期自动解冻刷新
+// ===== v2.2.0 异步增强对账 / v2.2.2 扩展为升降级双向对账 =====
+// 同步决策先于增强数据返回：页面可能已按原始分数注入横幅/卡片甚至冻结。
+// 后台 enhanceScoreAsync 算出增强结论与同步 UI 层级不一致时发 scoreAdjusted，
+// 本处理器把页面 UI 调整到目标层级——升降均伴随 Toast（injectScoreChangeToast）。
+//   level='clear'  → 移除全部横幅与卡片；若仍处冻结态则登记窗口期自动解冻刷新
 //                     （打断一次浏览——负向证据压倒性时这是恢复功能的唯一途径）
-//   level='notice' → 从警示横幅降级为低权横幅（携带增强后明细），同样先解冻
-// v2.2.1：两种回撤均补发顶部 Toast——横幅/卡片静默消失会让用户困惑
-// （"刚才的警告呢？"），必须显式告知分数变化结论
-function handleScoreDowngrade(msg) {
-  var level = msg && msg.level === 'clear' ? 'clear' : 'notice';
-  debug('content.js 收到评分回撤 level=' + level + ' total=' + (msg && msg.total));
-  // 冻结态回撤：登记窗口期并整页刷新（刷新后重评命中窗口期不再冻结）。
+//   level='card'   → 仅保留低权琥珀卡片，移除各级横幅
+//   level='notice' → 低权横幅（携带增强后明细），卡片按 msg.card 决定去留
+//   level='warn'   → 警示横幅；msg.freeze 且尚未冻结时执行冻结
+// v2.2.2 BUG 修复：旧版仅在原始总分 ≥100 时触发回撤，60~99 分的琥珀卡片
+// 场景被遗漏（评分 70 弹卡后备案核验一致 -80 → 卡片残留不消失、无提示）
+
+// UI 层级序数（供方向判定；blocked=硬拦截跳页，等级最高）
+var UI_LEVEL_RANK = { none: 0, clear: 0, card: 1, notice: 2, warn: 3, blocked: 4 };
+
+// 当前已应用的 UI 状态（同步回执与本处理器共同维护）：
+// 用于对账去重（结论与展示一致时不重复弹 Toast）与升级/降级方向判定
+var appliedUiState = { level: 'none', card: false, total: null };
+
+function recordAppliedUi(level, card, total) {
+  appliedUiState = { level: level, card: !!card, total: Number(total) || 0 };
+}
+
+function handleScoreAdjusted(msg) {
+  var level = msg && Object.prototype.hasOwnProperty.call(UI_LEVEL_RANK, msg.level)
+    ? msg.level : 'clear';
+  var total = Number(msg && msg.total) || 0;
+  var wantCard = !!(msg && msg.card) && level !== 'clear';
+  var cur = appliedUiState;
+  // 去重：目标层级、卡片标记与总分均与当前展示一致 → 不动 UI 不弹 Toast
+  if (level === cur.level && wantCard === cur.card && total === cur.total) {
+    debug('content.js scoreAdjusted 与当前展示一致，跳过 level=' + level);
+    return;
+  }
+  var curRank = UI_LEVEL_RANK[cur.level] || 0;
+  var newRank = UI_LEVEL_RANK[level] || 0;
+  // 方向判定：层级序数下降=回撤；上升=升级；同层内按卡片去留区分
+  //（加卡片视为升级提示，减卡片视为降级）
+  var direction;
+  if (newRank !== curRank) {
+    direction = newRank < curRank ? 'down' : 'up';
+  } else {
+    direction = wantCard ? 'up' : 'down';
+  }
+  debug('content.js 收到评分对账 ' + cur.level + '→' + level +
+    ' total=' + total + ' dir=' + direction);
+
+  // 回撤方向的冻结解除：登记窗口期并整页刷新（r3 方案，见 freezePage 注释）。
   // 先记录 wasFrozen 供 Toast 文案区分"解冻刷新"与普通回撤
-  var wasFrozen = freezeApplied && !pageUnfrozen;
+  var wasFrozen = direction === 'down' && freezeApplied && !pageUnfrozen;
   if (wasFrozen) unfreezePage();
-  // 移除警示横幅（含冻结态宿主）
-  if (warnBannerHostEl) {
+
+  // 警示横幅：目标不是 warn → 移除
+  if (level !== 'warn' && warnBannerHostEl) {
     try { warnBannerHostEl.remove(); } catch(e) { /* */ }
     warnBannerHostEl = null;
     warnBannerRoot = null;
@@ -848,27 +909,45 @@ function handleScoreDowngrade(msg) {
     updateWarningBannerText = null;
     bannerFrozenState = false;
   }
-  if (level === 'clear') {
-    // 全部回撤：低权横幅与琥珀卡片一并移除
-    if (noticeBannerHost) {
-      try { noticeBannerHost.remove(); } catch(e) { /* */ }
-      noticeBannerHost = null;
-      updateNoticeBannerText = null;
-    }
+  // 低权横幅：目标不是 notice → 移除
+  if (level !== 'notice' && noticeBannerHost) {
+    try { noticeBannerHost.remove(); } catch(e) { /* */ }
+    noticeBannerHost = null;
+    updateNoticeBannerText = null;
+  }
+  // 琥珀卡片：按目标决定保留（幂等更新文案）或移除
+  if (wantCard) {
+    injectNoticeCard({ total: total, details: (msg && msg.details) || [] });
+  } else {
     noticeCardUpdateText = null;
     var staleCard = document.getElementById('__yh_notice_card_host');
     if (staleCard) { try { staleCard.remove(); } catch(e) { /* */ } }
     noticeCardInjected = false;
-  } else {
-    // 降级为低权横幅（用增强后的明细渲染；已有关闭则尊重原状重新提示一次）
-    injectNoticeBanner({ total: (msg && msg.total) || 0, details: (msg && msg.details) || [] });
   }
-  // v2.2.1：回撤结论 Toast（冻结场景下页面即将刷新，Toast 在刷新前
-  // 短暂可见；刷新后窗口期重评若再次回撤会重新弹出）
-  injectDowngradeToast({
+  // 目标为警示层：注入/更新横幅（用增强后的明细渲染）；需要冻结且尚未
+  // 冻结时执行冻结（冻结门槛已由后台按 structure/resource 类证据判定）
+  if (level === 'warn') {
+    var enhancedResult = {
+      total: total,
+      details: (msg && msg.details) || [],
+      categoriesList: (msg && msg.categoriesList) || []
+    };
+    injectWarningBanner(enhancedResult);
+    if (msg && msg.freeze && !freezeApplied && !pageUnfrozen) {
+      freezePageIfNeeded(enhancedResult);
+    }
+  }
+
+  recordAppliedUi(level, wantCard, total);
+
+  // 升降级结论 Toast（冻结场景下页面即将刷新，Toast 在刷新前短暂可见；
+  // 刷新后窗口期重评若再次对账会重新弹出）
+  injectScoreChangeToast({
+    direction: direction,
     level: level,
-    total: (msg && msg.total) || 0,
-    wasFrozen: wasFrozen
+    total: total,
+    wasFrozen: wasFrozen,
+    frozen: freezeApplied && !pageUnfrozen
   });
 }
 
@@ -2185,13 +2264,18 @@ function readCachedRules() {
         if (!response) return;
         if (response.blocked && response.exempt === 'official') {
           injectVerifyCard('score');
+          recordAppliedUi('blocked', false, result.total);
         } else if (!response.blocked && response.warn) {
           // v2.1.3 r3：回执带 unfrozen = 窗口期内（用户已确认解冻并
           // 刷新）——仅显示警示横幅，不再冻结，页面功能保持完整
           injectWarningBanner(result);
           if (!response.unfrozen) freezePageIfNeeded(result);
+          recordAppliedUi('warn', !!response.card, result.total);
         } else if (!response.blocked && response.notice) {
           injectNoticeBanner(result);
+          recordAppliedUi('notice', !!response.card, result.total);
+        } else {
+          recordAppliedUi('none', !!response.card, result.total);
         }
         // v2.2.0：低权琥珀卡片——疑似风险但无结构性分发证据的放行提示。
         // 可与警示/低权横幅叠加：卡片承载"已放行"结论，横幅承载评分层级
@@ -2246,10 +2330,11 @@ function readCachedRules() {
 
   // popup 主动查询当前页评分（"重新评分"按钮/打开弹窗时调用）
   chrome.runtime.onMessage.addListener(function(msg, sender, sendResponse) {
-    // v2.2.0：后台异步增强后总分跌破阈值 → 回撤横幅/卡片/冻结
-    //（备案核验一致 -80、老域名抵扣 -15 等负分把总分拉回 100 以下时触发）
-    if (msg.action === 'scoreDowngraded') {
-      handleScoreDowngrade(msg);
+    // v2.2.2：后台异步增强后 UI 层级与同步结论不一致 → 升降级对账
+    //（备案核验一致 -80、老域名抵扣 -15 等负分回撤；新注册域名/盗用备案等
+    // 正分升级——无论方向均调整 UI 并弹 Toast）
+    if (msg.action === 'scoreAdjusted') {
+      handleScoreAdjusted(msg);
       sendResponse({ ok: true });
       return;
     }

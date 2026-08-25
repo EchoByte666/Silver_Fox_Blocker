@@ -34,6 +34,7 @@ Chrome/Edge MV3 浏览器扩展：拦截"银狐"木马钓鱼/仿冒网站。
 - `RULE_SOURCE_URLS`：background.js / offscreen.js / popup.js 三处
 - 默认白名单：background.js `DEFAULT_WHITELIST` 与 popup.js `BUILT_IN_WHITELIST`
 - `matchesPatternDomain` / `isGovCn` / `levenshteinWithin1` 等工具函数在 background.js 与 content.js 各有一份，语义需保持一致
+- `uiLevelOf`（UI 层级判定 warn/notice/card/clear）：background.js 同步决策与 enhanceScoreAsync 对账共用同一规则，修改阈值时两处及 content.js 展示层同步
 
 ## 参考项目
 

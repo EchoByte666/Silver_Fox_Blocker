@@ -53,6 +53,30 @@ function matchesBlockedDomain(hostname, domains) {
   return matchesDomainList(hostname, domains);
 }
 
+// v2.2.1 新增：注册域提取与同站判定（评分引擎专用）。
+// 逻辑与 background.js 的 getRegistrableDomain 一致（修改需两处同步）：
+// www.huorrong.com.cn → huorrong.com.cn；dl.xxx.com 与 xxx.com 同主域。
+// 用途："外部安装包"类指标的目标域名比对——安装包托管在自家下载子域
+// （dl./cdn./download. 等）是正规官网的标准做法，按精确 hostname 比较
+// 会把站内子域误判为外部域（+30/+20 误报），必须按注册域比较
+function getRegistrableDomain(hostname) {
+  const labels = String(hostname || '').toLowerCase().split('.').filter(Boolean);
+  if (labels.length <= 2) return labels.join('.');
+  const tld = labels[labels.length - 1];
+  const second = labels[labels.length - 2];
+  const isCnDouble = tld === 'cn' && ['com', 'net', 'org', 'gov', 'edu', 'ac'].includes(second);
+  const cut = isCnDouble ? 2 : 1;
+  return labels.slice(labels.length > cut ? -cut - 1 : 0).join('.');
+}
+
+// 两个 hostname 是否属于同一注册域（含相等）；任一为空返回 false
+function isSameSiteHost(targetHost, pageHost) {
+  targetHost = String(targetHost || '').toLowerCase();
+  pageHost = String(pageHost || '').toLowerCase();
+  if (!targetHost || !pageHost) return false;
+  return getRegistrableDomain(targetHost) === getRegistrableDomain(pageHost);
+}
+
 // v2.1.0 新增：判断是否为政府域名（gov.cn 或其子域名）。
 // 与 background.js 的 isGovCn 语义一致（修改需两处同步）——
 // 政府域名一律不拦截，首屏本地快筛直接放行，省一次 checkPage 消息往返
@@ -1821,7 +1845,9 @@ function readCachedRules() {
       var disguisedCount = item.labels.filter(function(label) {
         return /帮助|文档|教程|客服|公司|新闻|加入|隐私|政策|条款|地图|关于/.test(label);
       }).length;
-      if (item.host !== host && !officialTarget && item.count >= 5 && disguisedCount >= 3) {
+      // v2.2.1：按注册域比较——自家下载子域（dl.xxx.com）不算"外部"，
+      // 站内功能链接伪装判定的对象是真正跨主域的安装包直链
+      if (!isSameSiteHost(item.host, host) && !officialTarget && item.count >= 5 && disguisedCount >= 3) {
         externalPackageAbuse = item.count + ' 个链接（其中 ' + disguisedCount + ' 个非下载功能）：' + target;
         return true;
       }
@@ -1830,7 +1856,8 @@ function readCachedRules() {
     add('externalPackageAbuse', '站内功能链接伪装为外部安装包', 20,
       !!externalPackageAbuse, externalPackageAbuse, 'brand');
 
-    // 多平台使用外部安装包（安装包域名 ≠ 站点域名，+30）
+    // 多平台使用外部安装包（安装包域名与站点跨主域，+30）。
+    // v2.2.1：按注册域比较——托管在自家下载子域（dl.xxx.com）不算外部
     var externalPlatformPackages = '';
     var packagePlatformGroups = [/windows/i, /macos|\bmac\b/i, /linux|ubuntu|debian|fedora|arch/i, /android/i, /ios|iphone|ipad/i, /智能电视|android tv|fire tv|google tv/i];
     var packageContext = packageLinks.map(function(link) {
@@ -1840,15 +1867,16 @@ function readCachedRules() {
     }).join(' ');
     var packagePlatformCount = packagePlatformGroups.filter(function(pattern) { return pattern.test(packageContext); }).length;
     var externalPackageCount = packageLinks.filter(function(link) {
-      try { return new URL(link.href, location.href).hostname.toLowerCase() !== host; }
+      try { return !isSameSiteHost(new URL(link.href, location.href).hostname.toLowerCase(), host); }
       catch(e) { return false; }
     }).length;
-    // 外部安装包域名去重统计（跨平台安装包分散到多个外部域名指标用）
+    // 外部安装包域名去重统计（跨平台安装包分散到多个外部域名指标用）。
+    // v2.2.1：同站子域不计入"外部域名"
     var externalPackageHosts = Object.create(null);
     packageLinks.forEach(function(link) {
       try {
         var packageHost = new URL(link.href, location.href).hostname.toLowerCase();
-        if (packageHost !== host) externalPackageHosts[packageHost] = true;
+        if (!isSameSiteHost(packageHost, host)) externalPackageHosts[packageHost] = true;
       } catch(e) { /* */ }
     });
     if (brandMatch && packageLinks.length >= 3 && packagePlatformCount >= 3 && externalPackageCount >= 3) {
@@ -1910,8 +1938,9 @@ function readCachedRules() {
       if (!/下载|download|安装包/i.test(labelText) && !isPackageHref) return;
       try {
         var entryTarget = new URL(hrefAttr, location.href);
-        // 站内导航链接（当前域名 + 非安装包路径）不计入下载目标分析
-        if (entryTarget.hostname.toLowerCase() === host && !isPackageHref) return;
+        // 站内导航链接（同主域 + 非安装包路径）不计入下载目标分析。
+        // v2.2.1：按注册域比较，www./dl. 等子域同样视为站内
+        if (isSameSiteHost(entryTarget.hostname.toLowerCase(), host) && !isPackageHref) return;
       } catch(e) { /* 解析失败交给 addDownloadEntry 兜底分类 */ }
       addDownloadEntry(hrefAttr);
     });
@@ -1928,8 +1957,12 @@ function readCachedRules() {
       dlElementCount > 0 && dlUniqueHosts.length === 0;
     add('noRealDownload', '无实际下载功能', -25, noRealDownload,
       noRealDownload ? dlElementCount + ' 个下载入口均为占位符' : '');
+    // v2.2.1：官方域抵扣认同站子域（dl.xxx.com 是页面所属站的自有分发，
+    // 与品牌官方域同视为可信目标）
     var allOfficialDownloads = !!brandMatch && dlUniqueHosts.length > 0 &&
-      dlUniqueHosts.every(isOfficialTargetHost);
+      dlUniqueHosts.every(function(dlHost) {
+        return isOfficialTargetHost(dlHost) || isSameSiteHost(dlHost, host);
+      });
     add('officialDownloads', '下载入口全部指向品牌官方域', -30, allOfficialDownloads,
       allOfficialDownloads ? dlUniqueHosts.slice(0, 3).join('、') : '');
 

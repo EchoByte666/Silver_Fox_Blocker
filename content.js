@@ -767,17 +767,78 @@ function injectNoticeCard(result) {
   debug('content.js 低权琥珀卡片已注入（评分 ' + result.total + '）');
 }
 
+// ===== v2.2.1：评分回撤 Toast =====
+// 分数经异步核验（备案一致 -80 / 老域名 -15）跌破软拦截线后，
+// 用户此前看到的警示横幅/卡片/冻结会静默消失——缺少"为什么没了"的解释。
+// 本 Toast 补上这一环：页面顶部居中短暂提示（Shadow DOM 防伪造），
+// 6 秒自动消退，可点击立即关闭。
+//   level='clear' + 曾冻结 → "已解冻并刷新"
+//   level='clear'          → "已解除警示与限制"
+//   level='notice'         → "已降级为低权提示"
+function injectDowngradeToast(info) {
+  if (window.top !== window) return;
+  if (!document.body) return;
+  // 已有 Toast 在显示：移除旧的再注入新的（最新结论优先）
+  var staleToast = document.getElementById('__yh_downgrade_toast_host');
+  if (staleToast) { try { staleToast.remove(); } catch(e) { /* */ } }
+
+  var host = document.createElement('div');
+  host.id = '__yh_downgrade_toast_host';
+  document.body.appendChild(host);
+  var root = host.attachShadow({ mode: 'closed' });
+  var total = Number(info && info.total) || 0;
+  var text;
+  if (info && info.level === 'notice') {
+    text = '风险评分调整为 ' + total + '/150（未达拦截标准），已降级为低权提示';
+  } else if (info && info.wasFrozen) {
+    text = '风险评分已降至 ' + total + '/150，本页限制已解除，正在刷新页面…';
+  } else {
+    text = '风险评分已降至 ' + total + '/150，已解除本页警示与限制，可正常浏览';
+  }
+  root.innerHTML =
+    '<style>' +
+    ':host { position: fixed; top: 14px; left: 50%; transform: translateX(-50%);' +
+    '  z-index: 2147483647; font-family: system-ui, "Microsoft YaHei", sans-serif; }' +
+    '.toast { display: flex; align-items: center; gap: 8px; max-width: 480px;' +
+    '  box-sizing: border-box; padding: 9px 14px;' +
+    '  background: rgba(236,253,245,0.97); border: 1px solid #34d399;' +
+    '  border-radius: 10px; box-shadow: 0 6px 22px rgba(5,150,105,0.18);' +
+    '  animation: toast-in .25s ease both, toast-out .4s ease 5.6s both;' +
+    '  cursor: pointer; }' +
+    '@keyframes toast-in { from { opacity: 0; transform: translateY(-8px); }' +
+    '  to { opacity: 1; transform: none; } }' +
+    '@keyframes toast-out { to { opacity: 0; transform: translateY(-8px); } }' +
+    '.icon { flex-shrink: 0; color: #059669; }' +
+    '.text { font-size: 12px; color: #065f46; line-height: 1.5; }' +
+    '</style>' +
+    '<div class="toast" role="status">' +
+    '  <svg class="icon" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>' +
+    '  <span class="text">银狐拦截系统：' + text + '</span>' +
+    '</div>';
+  // 点击或动画结束（6s）后整体移除
+  var toastEl = root.querySelector('.toast');
+  function dismiss() { try { host.remove(); } catch(e) { /* */ } }
+  if (toastEl) toastEl.addEventListener('click', dismiss);
+  setTimeout(dismiss, 6000);
+  debug('content.js 评分回撤 Toast 已注入 level=' + (info && info.level));
+}
+
 // ===== v2.2.0：异步增强回撤（备案核验一致 -80 / 老域名抵扣 -15 后总分跌破阈值）=====
 // 同步决策先于增强数据返回：页面可能已按原始高分注入警示横幅甚至冻结。
 // 后台 enhanceScoreAsync 算出负分抵扣后的新总分低于阈值时发本消息回撤：
-//   level='clear'  → 移除全部横幅与卡片；若仍处冻结态则登记窗口期自动解冻刷新
+//   level='clear'  → 移除全部横幅与卡片 + Toast 提示用户已解除；
+//                     若仍处冻结态则登记窗口期自动解冻刷新
 //                     （打断一次浏览——负向证据压倒性时这是恢复功能的唯一途径）
 //   level='notice' → 从警示横幅降级为低权横幅（携带增强后明细），同样先解冻
+// v2.2.1：两种回撤均补发顶部 Toast——横幅/卡片静默消失会让用户困惑
+// （"刚才的警告呢？"），必须显式告知分数变化结论
 function handleScoreDowngrade(msg) {
   var level = msg && msg.level === 'clear' ? 'clear' : 'notice';
   debug('content.js 收到评分回撤 level=' + level + ' total=' + (msg && msg.total));
-  // 冻结态回撤：登记窗口期并整页刷新（刷新后重评命中窗口期不再冻结）
-  if (freezeApplied && !pageUnfrozen) unfreezePage();
+  // 冻结态回撤：登记窗口期并整页刷新（刷新后重评命中窗口期不再冻结）。
+  // 先记录 wasFrozen 供 Toast 文案区分"解冻刷新"与普通回撤
+  var wasFrozen = freezeApplied && !pageUnfrozen;
+  if (wasFrozen) unfreezePage();
   // 移除警示横幅（含冻结态宿主）
   if (warnBannerHostEl) {
     try { warnBannerHostEl.remove(); } catch(e) { /* */ }
@@ -802,6 +863,13 @@ function handleScoreDowngrade(msg) {
     // 降级为低权横幅（用增强后的明细渲染；已有关闭则尊重原状重新提示一次）
     injectNoticeBanner({ total: (msg && msg.total) || 0, details: (msg && msg.details) || [] });
   }
+  // v2.2.1：回撤结论 Toast（冻结场景下页面即将刷新，Toast 在刷新前
+  // 短暂可见；刷新后窗口期重评若再次回撤会重新弹出）
+  injectDowngradeToast({
+    level: level,
+    total: (msg && msg.total) || 0,
+    wasFrozen: wasFrozen
+  });
 }
 
 // ===== v2.1.3 r3：页面冻结（评分 100~149 软拦截层强化，无模态 + 窗口期解冻） =====
@@ -1957,12 +2025,11 @@ function readCachedRules() {
       dlElementCount > 0 && dlUniqueHosts.length === 0;
     add('noRealDownload', '无实际下载功能', -25, noRealDownload,
       noRealDownload ? dlElementCount + ' 个下载入口均为占位符' : '');
-    // v2.2.1：官方域抵扣认同站子域（dl.xxx.com 是页面所属站的自有分发，
-    // 与品牌官方域同视为可信目标）
+    // v2.2.1：同站子域（dl.xxx.com）中性处理——既不算"外部安装包"加分
+    // （上方已按注册域比较），也不参与本项 -30 抵扣。抵扣只针对
+    // 规则库品牌官方域/可信域，同站分发是常态、不构成额外信任证据
     var allOfficialDownloads = !!brandMatch && dlUniqueHosts.length > 0 &&
-      dlUniqueHosts.every(function(dlHost) {
-        return isOfficialTargetHost(dlHost) || isSameSiteHost(dlHost, host);
-      });
+      dlUniqueHosts.every(isOfficialTargetHost);
     add('officialDownloads', '下载入口全部指向品牌官方域', -30, allOfficialDownloads,
       allOfficialDownloads ? dlUniqueHosts.slice(0, 3).join('、') : '');
 

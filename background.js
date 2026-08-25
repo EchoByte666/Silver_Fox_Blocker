@@ -701,10 +701,15 @@ async function enhanceScoreAsync(tabId, url, result) {
     //     旧逻辑完全抓不到（查实了只显示不计分）；
     //   域名无备案 → 维持原 +20（页面声明了备案但域名查无记录）。
     // 外国站不声明备案，天然规避"API 对外国站返回查询失败"的误判陷阱
+    // v2.2.3：icpVerifiedConsistent 标记供两处使用——
+    //   1) 对账层的品牌嫌疑判定（见下方 brandSuspicion）；
+    //   2) 写入终局结论缓存供同步决策消费（刷新后同样解除卡片钉定）
+    let icpVerifiedConsistent = false;
     if (result.icpClaimed && icpInfo.queried && icpInfo.hasIcp) {
       const claimed = String(result.icpNumber || '');
       const numbersConsistent = icpNumbersMatch(claimed, icpInfo.icpNumber);
       if (numbersConsistent) {
+        icpVerifiedConsistent = true;
         enhancedTotal += ICP_MATCH_BONUS;
         details.push({ id: 'icpVerified', label: '备案号核验一致', points: ICP_MATCH_BONUS,
           matched: true, evidence: claimed + ' 与 ' + domain +
@@ -738,6 +743,7 @@ async function enhanceScoreAsync(tabId, url, result) {
       total: enhancedTotal,
       categories: catSet.size,
       categoriesList: Array.from(catSet),
+      icpVerified: icpVerifiedConsistent,
       ts: Date.now()
     });
     if (_enhancedVerdicts.size > ENHANCED_VERDICT_MAX) {
@@ -752,7 +758,11 @@ async function enhanceScoreAsync(tabId, url, result) {
     // 卡片场景被遗漏（如评分 70 弹卡后备案核验一致 -80 → 卡片残留不消失）
     if (!willUpgrade && !verdictUnchanged) {
       const originalTotal = Number(result.total) || 0;
-      const brandSuspicion = hasBrandSuspicionFlag(result);
+      // v2.2.3：备案核验一致是强信任证据（盗用备案号很难连号码一起伪造
+      // 一致）——解除品牌嫌疑对 UI 层级的钉定，让 -80 抵扣真正生效。
+      // 否则嫌疑页分数降到 -10 仍被钉在 card 层：卡片永不撤除、对账判定
+      // "层级没变"连 Toast 都不发（v2.2.2 上线后用户实测复现的残留问题）
+      const brandSuspicion = hasBrandSuspicionFlag(result) && !icpVerifiedConsistent;
       const syncLevel = uiLevelOf(originalTotal, brandSuspicion);
       const enhancedLevel = uiLevelOf(enhancedTotal, brandSuspicion);
       if (enhancedLevel !== syncLevel) {
@@ -2431,10 +2441,12 @@ chrome.runtime.onMessage.addListener(function(msg, sender, sendResponse) {
         } else {
           // v2.2.0：负分抵扣项（下载入口全指向官方域 -30 / 无实际下载功能 -25）
           // 把分数压到阈值以下的品牌仿冒疑似页也补一张"已放行"卡片——
-          // 分数虽低但 brandMatch 存在说明仍有冒充嫌疑，保持风险感知
-          const hasBrandSuspicion = Array.isArray(result.details) && result.details.some(
-            function(item) { return item.matched && item.points > 0 && item.id === 'domainBrandImpersonation'; }) ||
-            !!result.brand;
+          // 分数虽低但 brandMatch 存在说明仍有冒充嫌疑，保持风险感知。
+          // v2.2.3：备案核验一致（终局结论 icpVerified）时解除嫌疑钉定——
+          // 号码与域名备案记录相符是强信任证据，-10 分还挂着"已放行提示"
+          // 卡片属于误报残留（与 enhanceScoreAsync 对账层同规则，两处同步）
+          const brandCardSuppressed = !!(priorVerdict && priorVerdict.icpVerified);
+          const hasBrandSuspicion = !brandCardSuppressed && hasBrandSuspicionFlag(result);
           sendResponse({ ok: true, blocked: false,
             card: (totalScore >= 60 || hasBrandSuspicion) });
         }

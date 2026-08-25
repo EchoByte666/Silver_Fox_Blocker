@@ -832,7 +832,23 @@ async function enhanceScoreAsync(tabId, url, result) {
     });
     const warningUrl = chrome.runtime.getURL('warning.html') + '?tab=' + tabId +
       '&score=1&url=' + encodeURIComponent(url) + '&t=' + Date.now();
-    chrome.tabs.update(tabId, { url: warningUrl }, function() { void chrome.runtime.lastError; });
+    // v2.2.4：跳转前先通知原页面弹"已达到拦截标准"升级 Toast（此前升级
+    // 硬拦截完全静默——页面毫无征兆直接变成警告页），短暂停留让提示
+    // 可见后再执行跳转
+    try {
+      chrome.tabs.sendMessage(tabId, {
+        action: 'scoreEscalated',
+        total: enhancedTotal,
+        details: details.filter(function(item) { return item.matched; })
+      }, function() { void chrome.runtime.lastError; });
+    } catch(e) { /* 页面可能已导航离开 */ }
+    setTimeout(function() {
+      try {
+        chrome.tabs.update(tabId, { url: warningUrl }, function() {
+          void chrome.runtime.lastError;
+        });
+      } catch(e) { /* 标签页可能已关闭 */ }
+    }, 1600);
     debug('异步增强拦截! tabId=' + tabId + ' total=' + enhancedTotal +
       ' age=' + days + 'd icpFake=' + (result.icpClaimed && icpInfo.queried && !icpInfo.hasIcp) +
       ' url=' + url);
@@ -2430,14 +2446,15 @@ chrome.runtime.onMessage.addListener(function(msg, sender, sendResponse) {
             '）tabId=' + (sender.tab && sender.tab.id) +
             ' total=' + totalScore + ' categories=' + categoryCount + ' url=' + scoreUrl);
           sendResponse({ ok: true, blocked: false, warn: true, unfrozen: unfrozen,
-            card: pureHighScore });
+            card: pureHighScore, effectiveTotal: totalScore });
         } else if (totalScore >= 80) {
           // v2.1.3 低权重提示层：80~99——灰蓝细横幅（信任降级提示，
           // 不冻结不阻断），风险感知前移，误报零干扰
           debug('scorePage 低权重提示（信任降级横幅' + (pureHighScore ? '+卡片' : '') +
             '）tabId=' + (sender.tab && sender.tab.id) +
             ' total=' + totalScore + ' url=' + scoreUrl);
-          sendResponse({ ok: true, blocked: false, notice: true, card: pureHighScore });
+          sendResponse({ ok: true, blocked: false, notice: true, card: pureHighScore,
+            effectiveTotal: totalScore });
         } else {
           // v2.2.0：负分抵扣项（下载入口全指向官方域 -30 / 无实际下载功能 -25）
           // 把分数压到阈值以下的品牌仿冒疑似页也补一张"已放行"卡片——
@@ -2448,7 +2465,8 @@ chrome.runtime.onMessage.addListener(function(msg, sender, sendResponse) {
           const brandCardSuppressed = !!(priorVerdict && priorVerdict.icpVerified);
           const hasBrandSuspicion = !brandCardSuppressed && hasBrandSuspicionFlag(result);
           sendResponse({ ok: true, blocked: false,
-            card: (totalScore >= 60 || hasBrandSuspicion) });
+            card: (totalScore >= 60 || hasBrandSuspicion),
+            effectiveTotal: totalScore });
         }
         // v2.1.3 异步增强（参考开源项目 RDAP/ICP API）：有基础风险的页面
         //（≥60 分）在回执后并查域名年龄与备案记录——新注册域名 +40/+20、

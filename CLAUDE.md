@@ -35,6 +35,8 @@ Chrome/Edge MV3 浏览器扩展：拦截"银狐"木马钓鱼/仿冒网站。
 - 默认白名单：background.js `DEFAULT_WHITELIST` 与 popup.js `BUILT_IN_WHITELIST`
 - `matchesPatternDomain` / `isGovCn` / `levenshteinWithin1` 等工具函数在 background.js 与 content.js 各有一份，语义需保持一致
 - `uiLevelOf`（UI 层级判定 warn/notice/card/clear）：background.js 同步决策与 enhanceScoreAsync 对账共用同一规则，修改阈值时两处及 content.js 展示层同步
+- UI 层级切换统一走 content.js `applyScoreVerdict()`：同步回执与异步对账（scoreAdjusted）共用，新增层级相关逻辑时勿在分支里单独注入/移除 UI；同步回执必须携带 `effectiveTotal`（后台实际判定分），否则去重失效会误报 Toast
+- 硬拦截升级提示：background.js 跳警告页前发 `scoreEscalated` 并延迟 1.6s 再 `tabs.update`
 
 ## 参考项目
 

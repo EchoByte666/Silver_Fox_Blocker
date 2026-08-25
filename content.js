@@ -793,7 +793,9 @@ function injectScoreChangeToast(info) {
   var isUp = !!(info && info.direction === 'up');
   var text;
   if (isUp) {
-    if (info.level === 'warn') {
+    if (info.level === 'blocked') {
+      text = '风险评分上调至 ' + total + '/150，已达到拦截标准，正在转入拦截页…';
+    } else if (info.level === 'warn') {
       text = '风险评分上调至 ' + total + '/150，已显示警示横幅' +
         (info.frozen ? '并冻结页面交互，请谨慎操作' : '');
     } else if (info.level === 'notice') {
@@ -871,9 +873,22 @@ function recordAppliedUi(level, card, total) {
   appliedUiState = { level: level, card: !!card, total: Number(total) || 0 };
 }
 
+// 对账消息入口：后台异步增强结论到达时调用（带 Toast）
 function handleScoreAdjusted(msg) {
+  applyScoreVerdict(msg, true);
+}
+
+// v2.2.4：统一裁决应用器——同步回执与异步对账共用同一套层级切换逻辑。
+// 此前同步重评路径只注入新层级 UI：不清除旧层级残留（琥珀卡片叠在横幅上）、
+// 不弹 Toast，出现"升到 80 无提示""100+ 有冻结无提示"等不对账现象
+//   allowToast=true 且非首次应用 → 层级切换伴随 Toast
+//   首次应用（appliedUiState.total 为 null）→ 一律静默，与初始拦截流程一致
+function applyScoreVerdict(msg, allowToast) {
   var level = msg && Object.prototype.hasOwnProperty.call(UI_LEVEL_RANK, msg.level)
     ? msg.level : 'clear';
+  // 归一化：同步路径的"无 UI"记作 none，异步消息记作 clear——序数相同，
+  // 统一为 clear 避免去重比较因字符串不同而失效（每次重评误报降级 Toast）
+  if (level === 'none') level = 'clear';
   var total = Number(msg && msg.total) || 0;
   var wantCard = !!(msg && msg.card) && level !== 'clear';
   var cur = appliedUiState;
@@ -939,6 +954,10 @@ function handleScoreAdjusted(msg) {
   }
 
   recordAppliedUi(level, wantCard, total);
+
+  // 首次应用不弹 Toast（页面初始拦截/放行本就静默，与历史行为一致）；
+  // 之后每次层级切换都提示
+  if (!allowToast || cur.total === null) return;
 
   // 升降级结论 Toast（冻结场景下页面即将刷新，Toast 在刷新前短暂可见；
   // 刷新后窗口期重评若再次对账会重新弹出）
@@ -2265,23 +2284,27 @@ function readCachedRules() {
         if (response.blocked && response.exempt === 'official') {
           injectVerifyCard('score');
           recordAppliedUi('blocked', false, result.total);
-        } else if (!response.blocked && response.warn) {
-          // v2.1.3 r3：回执带 unfrozen = 窗口期内（用户已确认解冻并
-          // 刷新）——仅显示警示横幅，不再冻结，页面功能保持完整
-          injectWarningBanner(result);
-          if (!response.unfrozen) freezePageIfNeeded(result);
-          recordAppliedUi('warn', !!response.card, result.total);
-        } else if (!response.blocked && response.notice) {
-          injectNoticeBanner(result);
-          recordAppliedUi('notice', !!response.card, result.total);
-        } else {
-          recordAppliedUi('none', !!response.card, result.total);
+          return;
         }
-        // v2.2.0：低权琥珀卡片——疑似风险但无结构性分发证据的放行提示。
-        // 可与警示/低权横幅叠加：卡片承载"已放行"结论，横幅承载评分层级
-        if (!response.blocked && response.card) {
-          injectNoticeCard(result);
-        }
+        if (response.blocked) return; // 硬拦截跳转中，页面 UI 无需调整
+        // v2.2.4：同步回执统一走 applyScoreVerdict——与异步对账共用同一套
+        // 层级切换逻辑。DOM 重评使层级变化时（如动态挂载的特征把 70 分推上
+        // 85/120），自动清除旧层级残留 UI 并弹升降 Toast；首次应用静默，
+        // 与初始拦截/放行流程的历史行为一致。
+        // effectiveTotal = 后台实际用于判定的总分（可能已被增强终局结论
+        // 替换），用它记录状态才能与异步对账的去重比较保持一致
+        var effTotal = (response.effectiveTotal != null) ?
+          Number(response.effectiveTotal) : result.total;
+        applyScoreVerdict({
+          level: response.warn ? 'warn' : (response.notice ? 'notice' :
+            (response.card ? 'card' : 'none')),
+          total: effTotal,
+          card: !!response.card,
+          details: result.details,
+          categoriesList: result.categoriesList,
+          // 回执带 unfrozen = 解冻窗口期内：仅警示不冻结（v2.1.3 r3）
+          freeze: !response.unfrozen
+        }, true);
       });
     } catch(e) { /* 扩展上下文失效时静默 */ }
   }
@@ -2330,6 +2353,17 @@ function readCachedRules() {
 
   // popup 主动查询当前页评分（"重新评分"按钮/打开弹窗时调用）
   chrome.runtime.onMessage.addListener(function(msg, sender, sendResponse) {
+    // v2.2.4：异步增强把结论推上硬拦截线——后台跳转警告页前先通知本页面
+    // 弹"已达拦截标准"升级 Toast（停留约 1.6 秒后跳转）
+    if (msg.action === 'scoreEscalated') {
+      injectScoreChangeToast({
+        direction: 'up',
+        level: 'blocked',
+        total: Number(msg.total) || 0
+      });
+      sendResponse({ ok: true });
+      return;
+    }
     // v2.2.2：后台异步增强后 UI 层级与同步结论不一致 → 升降级对账
     //（备案核验一致 -80、老域名抵扣 -15 等负分回撤；新注册域名/盗用备案等
     // 正分升级——无论方向均调整 UI 并弹 Toast）

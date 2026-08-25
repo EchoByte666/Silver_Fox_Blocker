@@ -584,11 +584,29 @@ function skipIcpQueryResult() {
   return { queried: false, hasIcp: false, skipped: true };
 }
 
+// ===== v2.2.0 异步增强计分常量（与 popup.js renderIntel 规则保持一致，
+// 修改时两处同步）=====
+const AGE_NEW_DAYS = 30;
+const AGE_RECENT_DAYS = 90;
+const AGE_MATURE_DAYS = 730;   // ≥730 天视为老域名 → -15 抵扣
+const AGE_MATURE_BONUS = -15;
+const ICP_MATCH_BONUS = -80;   // 备案号核验一致 → 大幅减分
+const ICP_STOLEN_PENALTY = 30; // 域名已备案但页面号码对不上 → 盗用他人备案号
+
+// 备案号一致性比对：只比数字段（"京ICP备2021035678号-1"与
+// "京ICP备2021035678号" 视为同一主体），任一缺失则无法判定一致性
+function icpNumbersMatch(claimed, apiNumber) {
+  const digits = function(s) { return String(s || '').replace(/\D+/g, ''); };
+  return !!claimed && !!apiNumber && digits(claimed) !== '' &&
+    digits(claimed) === digits(apiNumber);
+}
+
 // --- 异步增强与升级拦截 ---
 // scorePage 同步回执发出后调用（不阻塞响应）。查域名年龄；
-// 仅当页面已声明合规备案号（icpClaimed）时才查 ICP API 核验伪造备案。
-// 命中新增风险项且总分达硬拦截线 → 执行拦截（复用 blockedInfo 机制，
-// 警告页可展示含增强明细的完整评分）
+// 仅当页面已声明合规备案号（icpClaimed）时才查 ICP API 核验备案。
+// v2.2.0：负分抵扣（备案核验一致 -80 / 老域名 -15）把总分拉回阈值以下时
+// 发 scoreDowngraded 消息回撤横幅/冻结；命中新增风险项且总分达硬拦截线
+// → 执行拦截（复用 blockedInfo 机制，警告页可展示含增强明细的完整评分）
 const _enhanceInFlight = new Set();
 
 async function enhanceScoreAsync(tabId, url, result) {
@@ -628,18 +646,76 @@ async function enhanceScoreAsync(tabId, url, result) {
         evidence: '注册 ' + days + ' 天（' + ageSourceLabel + '）' });
     }
 
-    // 增强 2：伪造备案（structure 类证据）——页面声明了备案号但
-    // API 查询该域名无备案记录 → 盗用他人备案号（外国站不声明备案，
-    // 天然规避"API 对外国站返回查询失败"的误判陷阱）
-    if (result.icpClaimed && icpInfo.queried && !icpInfo.hasIcp) {
+    // v2.2.0 增强：老域名抵扣（domain 类负分）——银狐站用完即弃，
+    // 活过两年的域名是弱安全信号；数据现成，零额外请求
+    if (days >= AGE_MATURE_DAYS) {
+      enhancedTotal += AGE_MATURE_BONUS;
+      details.push({ id: 'domainMature', label: '老域名安全信号', points: AGE_MATURE_BONUS,
+        matched: true, evidence: '注册 ' + days + ' 天（' + ageSourceLabel + '）' });
+    }
+
+    // v2.2.0 增强：ICP 备案三态核验（structure 类证据）。
+    //   一致（域名已备案 且 页面声明号码与 API 记录数字段相同）→ -80：
+    //     强信任证据——盗用他人备案号很难连号码一起伪造一致；
+    //   域名已备案但号码对不上 → +30：比"查无备案"更隐蔽的仿冒手法，
+    //     旧逻辑完全抓不到（查实了只显示不计分）；
+    //   域名无备案 → 维持原 +20（页面声明了备案但域名查无记录）。
+    // 外国站不声明备案，天然规避"API 对外国站返回查询失败"的误判陷阱
+    if (result.icpClaimed && icpInfo.queried && icpInfo.hasIcp) {
+      const claimed = String(result.icpNumber || '');
+      const numbersConsistent = icpNumbersMatch(claimed, icpInfo.icpNumber);
+      if (numbersConsistent) {
+        enhancedTotal += ICP_MATCH_BONUS;
+        details.push({ id: 'icpVerified', label: '备案号核验一致', points: ICP_MATCH_BONUS,
+          matched: true, evidence: claimed + ' 与 ' + domain +
+          ' 备案记录相符（API 核验）' });
+      } else {
+        enhancedTotal += ICP_STOLEN_PENALTY;
+        catSet.add('structure');
+        details.push({ id: 'icpStolen', label: '涉嫌盗用他人备案号', points: ICP_STOLEN_PENALTY,
+          matched: true, evidence: '页面声明 ' + (claimed || '备案') + '，但 ' + domain +
+            ' 的备案记录为 ' + (icpInfo.icpNumber || '其他主体') + '（API 核验）' });
+      }
+    } else if (result.icpClaimed && icpInfo.queried && !icpInfo.hasIcp) {
       enhancedTotal += 20;
       catSet.add('structure');
       details.push({ id: 'icpFake', label: '备案号与域名不符', points: 20, matched: true,
         evidence: '页面声明备案但 ' + domain + ' 无备案记录（API 核验）' });
     }
 
-    // 升级判定：与同步路径同一标准（150 分 + 2 类证据）
-    if (enhancedTotal < 150 || catSet.size < 2) return;
+    // 升级判定：与同步路径同一标准（150 分 + 2 类证据）。
+    // v2.2.0：提前计算，避免同一页面既收到降级回撤又被跳警告页的矛盾决策
+    const willUpgrade = enhancedTotal >= 150 && catSet.size >= 2;
+
+    // v2.2.0 回撤判定：同步决策先于增强数据返回，页面可能已按原始高分
+    // 注入警示横幅甚至冻结。负分抵扣（备案一致 -80 / 老域名 -15）把总分
+    // 拉回软拦截线以下时，通知 content 回撤横幅/卡片并解除冻结；
+    // 总分仍在 100 以上但已无结构性/资源类证据时降级为低权横幅。
+    // 仅在不会升级拦截时发送（升级时警告页本身即最终结论）
+    if (!willUpgrade && (Number(result.total) || 0) >= 100) {
+      const downgradedDetails = details.filter(function(item) { return item.matched; });
+      let level = '';
+      if (enhancedTotal < 100) level = 'clear';
+      else {
+        const stillHardEvidence = Array.from(catSet).some(function(c) {
+          return c === 'structure' || c === 'resource';
+        });
+        if (!stillHardEvidence) level = 'notice';
+      }
+      if (level) {
+        try {
+          chrome.tabs.sendMessage(tabId, {
+            action: 'scoreDowngraded', level: level,
+            total: enhancedTotal, details: downgradedDetails
+          }, function() { void chrome.runtime.lastError; });
+        } catch(e) { /* 页面可能已导航离开 */ }
+        debug('enhanceScoreAsync 评分回撤 tabId=' + tabId + ' level=' + level +
+          ' original=' + result.total + ' enhanced=' + enhancedTotal);
+      }
+    }
+
+    // 升级拦截（回撤判定已确认不会与本决策冲突）
+    if (!willUpgrade) return;
 
     // 拦截前重新校验豁免状态（查询期间用户可能已加白/关开关/换页）
     await refreshWhitelistCache();
@@ -753,7 +829,7 @@ function applyBrandCheck(result, url) {
   // 域名品牌词仿冒——hostname 含品牌英文关键词（≥3 字符纯拉丁词）却不在
   // 官方域，typosquatting 证据（如 huorongaq.com 含 "huorong" 冒充火绒安全）。
   // v2.1.3：增加编辑距离 ≤1 比对，覆盖拼写变体（huorrong.com.cn 双写 r，
-  // 精确子串匹配抓不到）。命中时计入强信号直接硬拦
+  // 精确子串匹配抓不到）。v2.2.0：命中改为 +30 计分参与综合裁决，不再直拦
   const domainImpersonated = (matchedBrand.keywords || []).some(function(keyword) {
     const kw = String(keyword).toLowerCase();
     if (kw.length < 3 || !/^[a-z0-9]+$/.test(kw)) return false;
@@ -781,8 +857,9 @@ function applyBrandCheck(result, url) {
     domainDetail.points = 30;
     domainDetail.matched = true;
     domainDetail.evidence = matchedBrand.name + ' + ' + hostname;
-    // 强信号标记：scorePage 处理器读取后豁免证据多样性约束直接硬拦
-    result.strongSignal = true;
+    // v2.2.0：品牌/域名仿冒不再作为强信号直拦——保留 +30 计分，
+    // 参与综合裁决（分层策略 + 放行卡片承接），与 content.js 强特征
+    // 收紧（仅 noahApi/adseoResource）保持同一口径
   }
   // 品牌冒充 + 可疑域名模式组合：+20 分
   const labels = hostname.split('.');
@@ -2240,10 +2317,23 @@ chrome.runtime.onMessage.addListener(function(msg, sender, sendResponse) {
       const totalScore = Number(result.total) || 0;
       const strongSignal = !!result.strongSignal;
       const categoryCount = Number(result.categories) || 0;
-      // 硬拦截判定：黑名单 / 强特征 / 高分且证据多样
-      const hardBlock = legacyHit || strongSignal ||
-        (totalScore >= 150 && categoryCount >= 2);
+      // v2.2.0：结构性/资源类证据标记——"过度危险"的判定基础。
+      // structure=页面结构分发特征，resource=请求恶意资源
+      const categoriesList = Array.isArray(result.categoriesList) ? result.categoriesList : [];
+      const hasHardEvidence = categoriesList.indexOf('structure') !== -1 ||
+        categoriesList.indexOf('resource') !== -1;
+      // 硬拦截判定：黑名单 / 强特征 / 高分且证据多样。
+      // v2.2.0：纯评分达线（≥150 且类别 ≥2）但无结构性分发证据时不再硬拦——
+      // 改走"放行 + 低权琥珀卡片"路径（见下方 noKnownMaliciousSource 分支），
+      // 只有黑名单命中、noahApi/adseoResource 强特征或存在结构/资源类证据
+      // 才允许直接跳警告页
+      const hardBlock = legacyHit || strongSignal || (hasHardEvidence &&
+        (totalScore >= 150 && categoryCount >= 2));
       if (!hardBlock) {
+        // v2.2.0：达硬拦截线但无已知恶意源且无结构性分发证据 → 放行 + 卡片。
+        // "已放行浏览——请核对官网后再下载文件或输入密码"
+        // （卡片与警示横幅可叠加：横幅承载评分层级，卡片承载放行结论）
+        const pureHighScore = !legacyHit && !strongSignal && totalScore >= 150;
         // 软拦截层：100~149（含 ≥150 但单类别堆分）——警示横幅 + 页面冻结。
         // v2.1.3 r3：解冻窗口期内（用户已确认解冻并刷新）只警示不冻结，
         // 回执带 unfrozen 标记，content 侧据此跳过 freezePageIfNeeded
@@ -2252,15 +2342,24 @@ chrome.runtime.onMessage.addListener(function(msg, sender, sendResponse) {
           debug('scorePage 软拦截（警示横幅' + (unfrozen ? '，窗口期内不冻结' : '+冻结') +
             '）tabId=' + (sender.tab && sender.tab.id) +
             ' total=' + totalScore + ' categories=' + categoryCount + ' url=' + scoreUrl);
-          sendResponse({ ok: true, blocked: false, warn: true, unfrozen: unfrozen });
+          sendResponse({ ok: true, blocked: false, warn: true, unfrozen: unfrozen,
+            card: pureHighScore });
         } else if (totalScore >= 80) {
           // v2.1.3 低权重提示层：80~99——灰蓝细横幅（信任降级提示，
           // 不冻结不阻断），风险感知前移，误报零干扰
-          debug('scorePage 低权重提示（信任降级横幅）tabId=' + (sender.tab && sender.tab.id) +
+          debug('scorePage 低权重提示（信任降级横幅' + (pureHighScore ? '+卡片' : '') +
+            '）tabId=' + (sender.tab && sender.tab.id) +
             ' total=' + totalScore + ' url=' + scoreUrl);
-          sendResponse({ ok: true, blocked: false, notice: true });
+          sendResponse({ ok: true, blocked: false, notice: true, card: pureHighScore });
         } else {
-          sendResponse({ ok: true, blocked: false });
+          // v2.2.0：负分抵扣项（下载入口全指向官方域 -30 / 无实际下载功能 -25）
+          // 把分数压到阈值以下的品牌仿冒疑似页也补一张"已放行"卡片——
+          // 分数虽低但 brandMatch 存在说明仍有冒充嫌疑，保持风险感知
+          const hasBrandSuspicion = Array.isArray(result.details) && result.details.some(
+            function(item) { return item.matched && item.points > 0 && item.id === 'domainBrandImpersonation'; }) ||
+            !!result.brand;
+          sendResponse({ ok: true, blocked: false,
+            card: (totalScore >= 60 || hasBrandSuspicion) });
         }
         // v2.1.3 异步增强（参考开源项目 RDAP/ICP API）：有基础风险的页面
         //（≥60 分）在回执后并查域名年龄与备案记录——新注册域名 +40/+20、

@@ -145,7 +145,8 @@ function renderScore(result) {
 // whoisjs 兜底链）；仅当页面声明了合规备案号时才查 ICP 备案 API，
 // 查询期间在评分明细底部显示加载动画。
 // 增强分与 background enhanceScoreAsync 同规则计入总分显示：
-//   域龄 <30 天 +40 / 30~90 天 +20；页面声明备案但 API 查无 +20
+//   域龄 <30 天 +40 / 30~90 天 +20 / ≥730 天 -15（v2.2.0 老域名抵扣）；
+//   备案三态核验（v2.2.0）：号码一致 -80 / 已备案但号码不符 +30 / 查无备案 +20
 
 // v2.1.4：域龄数据源标识 → 展示用"查询依据"文案（与实际命中源一致）
 function ageSourceText(source) {
@@ -169,8 +170,9 @@ function appendIntelLoading(icpClaimed) {
 
 // 渲染增强结果：intel 为 queryDomainIntel 回执
 // { creationDays, ageUnsupported, icpQueried, icpHas, icpNumber, domain }
-// baseTotal 为 content.js 基础总分；icpClaimed 为页面是否声明备案号
-function renderIntel(intel, baseTotal, threshold, icpClaimed) {
+// baseTotal 为 content.js 基础总分；icpClaimed 为页面是否声明备案号；
+// claimedIcpNumber（v2.2.0）为页面声明的备案号原文——与 API 记录做一致性比对
+function renderIntel(intel, baseTotal, threshold, icpClaimed, claimedIcpNumber) {
   const container = $('scoreList');
   if (!container) return;
   // 移除加载动画行（若查询失败则替换为失败提示）
@@ -210,6 +212,12 @@ function renderIntel(intel, baseTotal, threshold, icpClaimed) {
     ageLabel.textContent = '近期注册域名 · 注册 ' + days + ' 天' + sourceTag;
     agePoints.classList.add('positive');
     agePoints.textContent = '+20';
+  } else if (days >= 730) {
+    // v2.2.0：老域名安全信号 → -15 抵扣（与 enhanceScoreAsync 同规则）
+    bonus -= 15;
+    ageLabel.textContent = '老域名安全信号 · 注册 ' + days + ' 天' + sourceTag;
+    agePoints.classList.add('negative');
+    agePoints.textContent = '-15';
   } else if (days >= 90) {
     // 老域名：安全参考信息，不计分
     ageLabel.textContent = '域名年龄 · 注册 ' + days + ' 天' + sourceTag;
@@ -239,10 +247,31 @@ function renderIntel(intel, baseTotal, threshold, icpClaimed) {
     icpLabel.textContent = 'ICP 备案 · 查询失败（API 不可用）';
     icpPoints.textContent = '—';
   } else if (intel.icpHas) {
-    // 已备案：安全参考信息（备案号经"ICP备/证"严格校验）
-    icpLabel.textContent = 'ICP 备案 · ' + (intel.icpNumber || '已备案') + '（API 核验）';
-    icpPoints.classList.add('negative');
-    icpPoints.textContent = '0';
+    // v2.2.0 三态核验：域名已备案时比对页面声明号码与 API 记录——
+    //   数字段一致 → -80（强信任证据）；对不上 → +30（涉嫌盗用他人备案号）
+    const claimed = String(claimedIcpNumber || '');
+    const digitsOf = function(s) { return String(s || '').replace(/\D+/g, ''); };
+    if (claimed && intel.icpNumber &&
+        digitsOf(claimed) !== '' && digitsOf(claimed) === digitsOf(intel.icpNumber)) {
+      bonus -= 80;
+      icpLabel.textContent = '备案号核验一致 · ' + claimed + ' 与 ' +
+        intel.domain + ' 备案记录相符（API 核验）';
+      icpPoints.classList.add('negative');
+      icpPoints.textContent = '-80';
+    } else if (claimed || intel.icpNumber) {
+      bonus += 30;
+      icpRow.classList.add('hit');
+      icpLabel.textContent = '涉嫌盗用他人备案号 · 页面声明 ' + (claimed || '备案') +
+        '，但 ' + intel.domain + ' 的备案记录为 ' + (intel.icpNumber || '其他主体') +
+        '（API 核验）';
+      icpPoints.classList.add('positive');
+      icpPoints.textContent = '+30';
+    } else {
+      // 双方都无号码原文可比对：已备案作为安全参考信息，不计分
+      icpLabel.textContent = 'ICP 备案 · ' + (intel.icpNumber || '已备案') + '（API 核验）';
+      icpPoints.classList.add('negative');
+      icpPoints.textContent = '0';
+    }
   } else if (icpClaimed) {
     // 页面声明备案但 API 查无 → 盗用他人备案号
     bonus += 20;
@@ -259,10 +288,11 @@ function renderIntel(intel, baseTotal, threshold, icpClaimed) {
   icpRow.appendChild(icpPoints);
   container.appendChild(icpRow);
 
-  // 增强分计入总分显示（summary 同步更新；>0 时标注增强来源）
-  if (bonus > 0) {
+  // 增强分计入总分显示（summary 同步更新；非 0 时标注增强来源，
+  // v2.2.0 起负分抵扣也会更新总分）
+  if (bonus !== 0) {
     setText('popupScoreSummary', '评分明细 · ' + (baseTotal + bonus) +
-      ' / ' + (threshold || 150) + '（含情报增强 +' + bonus + '）');
+      ' / ' + (threshold || 150) + '（含情报增强 ' + (bonus > 0 ? '+' : '') + bonus + '）');
   }
 }
 
@@ -309,10 +339,14 @@ async function loadCurrentScore() {
         const intel = await chrome.runtime.sendMessage({
           action: 'queryDomainIntel',
           url: tabs[0].url,
-          icpClaimed: !!result.icpClaimed
+          icpClaimed: !!result.icpClaimed,
+          // v2.2.0：页面声明的备案号原文——popup 与后台同规则做一致性
+          // 比对展示（一致 -80 / 不符 +30）
+          icpNumber: String(result.icpNumber || '')
         });
         if (intel && intel.ok) {
-          renderIntel(intel, result.total, result.threshold || 150, !!result.icpClaimed);
+          renderIntel(intel, result.total, result.threshold || 150, !!result.icpClaimed,
+            String(result.icpNumber || ''));
         } else {
           renderIntelError();
         }

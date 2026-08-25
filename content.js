@@ -657,6 +657,129 @@ function injectNoticeBanner(result) {
   debug('content.js 低权重提示横幅已注入（评分 ' + result.total + '）');
 }
 
+// ===== v2.2.0：低权琥珀卡片（疑似风险已放行场景） =====
+// 触发场景（background 回执 card=true）：
+//   1) 总分达硬拦截线但无结构性分发证据——纯话术/纯品牌堆分不再跳警告页，
+//      改为放行 + 卡片；
+//   2) 疑似品牌仿冒但下载入口全部指向官方域 / 无实际下载功能（负分抵扣放行）
+//      ——无论分数落在哪一层都补一张"已放行"卡片。
+// 形态：右下角轻量琥珀卡片（Shadow DOM，防页面样式干扰/伪造），可关闭，
+// 与警示/低权横幅互不排斥（卡片承载"已放行"结论，横幅承载评分层级）。
+var noticeCardInjected = false;
+var noticeCardUpdateText = null;
+
+function injectNoticeCard(result) {
+  // 幂等：已注入时仅更新文案
+  if (noticeCardInjected) {
+    if (noticeCardUpdateText) noticeCardUpdateText(result);
+    return;
+  }
+  if (window.top !== window) return;
+  if (!document.body) return;
+  noticeCardInjected = true;
+
+  var host = document.createElement('div');
+  host.id = '__yh_notice_card_host';
+  document.body.appendChild(host);
+  var root = host.attachShadow({ mode: 'closed' });
+  root.innerHTML =
+    '<style>' +
+    ':host { position: fixed; right: 16px; bottom: 16px; z-index: 2147483645;' +
+    '  font-family: system-ui, "Microsoft YaHei", sans-serif; }' +
+    '.card { width: 300px; box-sizing: border-box; padding: 11px 13px;' +
+    '  background: rgba(254,243,199,0.97); border: 1px solid #fcd34d;' +
+    '  border-radius: 12px; box-shadow: 0 8px 28px rgba(180,83,9,0.18);' +
+    '  animation: rise .25s ease both; }' +
+    '@keyframes rise { from { opacity: 0; transform: translateY(10px); }' +
+    '  to { opacity: 1; transform: none; } }' +
+    '.head { display: flex; align-items: center; gap: 7px; }' +
+    '.head svg.icon { flex-shrink: 0; color: #b45309; }' +
+    '.title { flex: 1; min-width: 0; font-size: 11px; font-weight: 800;' +
+    '  letter-spacing: 1px; color: #b45309; }' +
+    '.close { border: none; background: none; cursor: pointer; padding: 3px;' +
+    '  flex-shrink: 0; display: flex; color: #b45309; border-radius: 6px; }' +
+    '.close:hover { color: #78350f; background: rgba(180,83,9,0.1); }' +
+    '.main { font-size: 12px; font-weight: 600; color: #92400e;' +
+    '  line-height: 1.55; margin-top: 6px; }' +
+    '.sub { display: block; font-size: 10.5px; font-weight: 500; color: #b45309;' +
+    '  margin-top: 3px; line-height: 1.5; }' +
+    '</style>' +
+    '<div class="card">' +
+    '  <div class="head">' +
+    '    <svg class="icon" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>' +
+    '    <span class="title">银狐拦截系统 · 已放行提示</span>' +
+    '    <button class="close" title="关闭提示" aria-label="关闭提示">' +
+    '      <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg>' +
+    '    </button>' +
+    '  </div>' +
+    '  <div class="main"></div>' +
+    '  <span class="sub"></span>' +
+    '</div>';
+
+  // 文案填充/更新（重评复用，卡片本体不重复注入）
+  function fillCardText(scoreResult) {
+    var items = ((scoreResult && scoreResult.details) || []).filter(function(item) {
+      return item.matched && item.points > 0;
+    });
+    var mainEl = root.querySelector('.main');
+    if (mainEl) {
+      mainEl.textContent = '该页面存在 ' + items.length + ' 项可疑特征（风险评分 ' +
+        ((scoreResult && scoreResult.total) || 0) + '/150），已放行浏览';
+    }
+    var subEl = root.querySelector('.sub');
+    if (subEl) subEl.textContent = '请核对官网后再下载文件或输入账号密码';
+  }
+  fillCardText(result);
+  noticeCardUpdateText = fillCardText;
+
+  var closeBtn = root.querySelector('.close');
+  if (closeBtn) {
+    closeBtn.addEventListener('click', function() {
+      noticeCardUpdateText = null;
+      try { host.remove(); } catch(e) { /* */ }
+      debug('content.js 低权琥珀卡片已关闭');
+    });
+  }
+  debug('content.js 低权琥珀卡片已注入（评分 ' + result.total + '）');
+}
+
+// ===== v2.2.0：异步增强回撤（备案核验一致 -80 / 老域名抵扣 -15 后总分跌破阈值）=====
+// 同步决策先于增强数据返回：页面可能已按原始高分注入警示横幅甚至冻结。
+// 后台 enhanceScoreAsync 算出负分抵扣后的新总分低于阈值时发本消息回撤：
+//   level='clear'  → 移除全部横幅与卡片；若仍处冻结态则登记窗口期自动解冻刷新
+//                     （打断一次浏览——负向证据压倒性时这是恢复功能的唯一途径）
+//   level='notice' → 从警示横幅降级为低权横幅（携带增强后明细），同样先解冻
+function handleScoreDowngrade(msg) {
+  var level = msg && msg.level === 'clear' ? 'clear' : 'notice';
+  debug('content.js 收到评分回撤 level=' + level + ' total=' + (msg && msg.total));
+  // 冻结态回撤：登记窗口期并整页刷新（刷新后重评命中窗口期不再冻结）
+  if (freezeApplied && !pageUnfrozen) unfreezePage();
+  // 移除警示横幅（含冻结态宿主）
+  if (warnBannerHostEl) {
+    try { warnBannerHostEl.remove(); } catch(e) { /* */ }
+    warnBannerHostEl = null;
+    warnBannerRoot = null;
+    warningBannerInjected = false;
+    updateWarningBannerText = null;
+    bannerFrozenState = false;
+  }
+  if (level === 'clear') {
+    // 全部回撤：低权横幅与琥珀卡片一并移除
+    if (noticeBannerHost) {
+      try { noticeBannerHost.remove(); } catch(e) { /* */ }
+      noticeBannerHost = null;
+      updateNoticeBannerText = null;
+    }
+    noticeCardUpdateText = null;
+    var staleCard = document.getElementById('__yh_notice_card_host');
+    if (staleCard) { try { staleCard.remove(); } catch(e) { /* */ } }
+    noticeCardInjected = false;
+  } else {
+    // 降级为低权横幅（用增强后的明细渲染；已有关闭则尊重原状重新提示一次）
+    injectNoticeBanner({ total: (msg && msg.total) || 0, details: (msg && msg.details) || [] });
+  }
+}
+
 // ===== v2.1.3 r3：页面冻结（评分 100~149 软拦截层强化，无模态 + 窗口期解冻） =====
 // 用户要求：保持横幅形态、不弹模态窗口——页面一切照常可见可滚动检查，
 // 但所有链接/按钮点击无反应、脚本暂存停用；用户核验后在横幅上解冻。
@@ -709,6 +832,16 @@ function freezePageIfNeeded(result) {
   // 仅顶级框架冻结（iframe 内页面的交互由顶层捕获拦截统一阻断）
   if (window.top !== window) return;
   if (!document.body) return;
+  // v2.2.0 冻结门槛收紧：冻结是误报代价最重的动作（页面瘫痪感）。
+  // 仅在总分 ≥100 且命中 structure/resource 类证据时执行——
+  // 纯话术/纯品牌堆分到 100+ 的页面只保留警示横幅、不冻结
+  var freezeCategories = (result && result.categoriesList) || [];
+  var hasHardEvidence = freezeCategories.indexOf('structure') !== -1 ||
+    freezeCategories.indexOf('resource') !== -1;
+  if (!(Number(result && result.total) >= 100 && hasHardEvidence)) {
+    debug('content.js 跳过冻结：无结构性/资源类证据（v2.2.0 门槛收紧）');
+    return;
+  }
   freezeApplied = true;
   freezePage(result);
 }
@@ -1456,6 +1589,16 @@ function readCachedRules() {
         if (matchesBrand(rule, normalizedTitleBrandText)) brandHitTier = 3;
         else if (matchesBrand(rule, normalizedHeadingBrandText)) brandHitTier = 2;
         else brandHitTier = 1;
+        // v2.2.0：仅 SEO 元数据命中（tier 1）且标题/h1 无声称词 → 不算冒充。
+        // meta keywords 堆品牌词的 SEO 站是分层计分后残留的最大误报源——
+        // "提及"≠"冒充"，清空 brandMatch 使全部 brand 类指标随之失效
+        if (brandHitTier === 1 &&
+            !/官网|官方|正版|下载/.test(
+              titleText + ' ' + (primaryHeading && primaryHeading.innerText || ''))) {
+          debug('content.js 品牌匹配豁免：仅 SEO 元数据命中且无声称词');
+          brandMatch = null;
+          brandHitTier = 0;
+        }
       }
     }
 
@@ -1722,6 +1865,74 @@ function readCachedRules() {
     add('archiveDownload', 'ZIP 压缩包下载', 5,
       !softwareCatalog && zipLinks.length > 0, zipLinks.length + ' 个', 'structure');
 
+    // ---- v2.2.0 下载入口指向分析（疑似品牌仿冒场景的放行证据，负分抵扣）----
+    // 仅在 brandMatch 存在（疑似品牌仿冒）时评估全部下载/安装入口的目标指向：
+    //   全部指向品牌官方域 → -30：用户被送往正版官网（导航站/推荐页场景），无害；
+    //   无任何有效下载目标 → -25：自称官网下载但按钮全是占位符/无下载功能——
+    //   空壳模板站（套模板蹭搜索流量但没有真实分发行为），配合负分压到阈值以下。
+    // 判定口径：
+    //   有效目标 = 可解析为 http(s)、非占位符（#/javascript:/空）的目标 URL，
+    //   来源覆盖 <a> 安装包直链、结构化数据 downloadUrl、脚本集中下载地址；
+    //   指向当前域名的非安装包链接视为站内导航不计入目标；
+    //   指向当前域名的安装包直链计入目标（自分发行为阻断"全官方"抵扣）。
+    var officialHostList = brandMatch ?
+      [].concat(brandMatch.officialDomains || [], brandMatch.trustedDomains || []) : [];
+    function isOfficialTargetHost(targetHost) {
+      return officialHostList.some(function(domain) {
+        domain = String(domain).toLowerCase();
+        return targetHost === domain || targetHost.endsWith('.' + domain);
+      });
+    }
+    var dlTargetHostMap = Object.create(null); // "host href" -> host（URL 级去重）
+    var dlPlaceholderCount = 0;                // 占位符下载元素计数
+    var dlElementCount = 0;                    // 下载语境元素总数
+    function addDownloadEntry(raw) {
+      raw = String(raw || '').trim();
+      if (!raw) return;
+      dlElementCount++;
+      if (/^javascript:/i.test(raw) || raw === '#') { dlPlaceholderCount++; return; }
+      try {
+        var target = new URL(raw, location.href);
+        if (target.protocol !== 'http:' && target.protocol !== 'https:') {
+          dlPlaceholderCount++;
+          return;
+        }
+        dlTargetHostMap[target.hostname.toLowerCase() + ' ' + target.href] =
+          target.hostname.toLowerCase();
+      } catch(e) { dlPlaceholderCount++; }
+    }
+    Array.from(document.querySelectorAll('a[href]')).forEach(function(link) {
+      var labelText = String(link.innerText || link.textContent || '');
+      var hrefAttr = String(link.getAttribute('href') || '');
+      var entryPathname = '';
+      try { entryPathname = new URL(hrefAttr, location.href).pathname; } catch(e) { /* */ }
+      var isPackageHref = /\.(?:zip|rar|7z|exe|msi|dmg|pkg|apk)$/i.test(entryPathname);
+      if (!/下载|download|安装包/i.test(labelText) && !isPackageHref) return;
+      try {
+        var entryTarget = new URL(hrefAttr, location.href);
+        // 站内导航链接（当前域名 + 非安装包路径）不计入下载目标分析
+        if (entryTarget.hostname.toLowerCase() === host && !isPackageHref) return;
+      } catch(e) { /* 解析失败交给 addDownloadEntry 兜底分类 */ }
+      addDownloadEntry(hrefAttr);
+    });
+    structuredDownloadUrls.forEach(addDownloadEntry);
+    addDownloadEntry(scriptedDownloadUrl);
+    var dlUniqueHosts = [];
+    Object.keys(dlTargetHostMap).forEach(function(key) {
+      var dlHost = dlTargetHostMap[key];
+      if (dlUniqueHosts.indexOf(dlHost) === -1) dlUniqueHosts.push(dlHost);
+    });
+    // v2.2.0：officialSiteClaim 已在上方赋值（标题含"官网/官方网站"），
+    // 空壳站判定限定在自称官网下载的语境下
+    var noRealDownload = !!brandMatch && !!officialSiteClaim &&
+      dlElementCount > 0 && dlUniqueHosts.length === 0;
+    add('noRealDownload', '无实际下载功能', -25, noRealDownload,
+      noRealDownload ? dlElementCount + ' 个下载入口均为占位符' : '');
+    var allOfficialDownloads = !!brandMatch && dlUniqueHosts.length > 0 &&
+      dlUniqueHosts.every(isOfficialTargetHost);
+    add('officialDownloads', '下载入口全部指向品牌官方域', -30, allOfficialDownloads,
+      allOfficialDownloads ? dlUniqueHosts.slice(0, 3).join('、') : '');
+
     // ---- 文案密度指标 ----
     // 密集安全承诺（"安全"出现 ≥10 次 + 下载软件语境）。
     // v2.1.2：+30 → +15 且门槛 5 次 → 10 次——安全类软件官网
@@ -1800,15 +2011,22 @@ function readCachedRules() {
     //   软拦截线 100：总分 100~149 不跳页，仅由 content 注入顶部警示横幅，
     //                浏览不中断、用户自行判断（误报代价从"无法访问"降为"一条提示"）
     // 强特征（单项命中即硬拦截，不受证据多样性约束）：
-    //   noahApi / adseoResource（各 +100）：银狐特异通信/分发域
-    //   domainBrandImpersonation：域名含品牌词且非官方域（typosquatting）
-    //   hasSdk && brandMatch && 有下载入口：51.la 统计 + 品牌冒充 + 下载
-    //     语境三者组合——银狐冒充站模板指纹。51.la 单独出现不拦（正规
-    //     统计服务，误报主源），但三者同现时恶意概率极高；
-    //     下载入口限定排除了"挂 51.la 的品牌教程博客"这类误报场景
+    //   v2.2.0 收紧为仅限已知恶意基础设施：noahApi / adseoResource（各 +100，
+    //   银狐特异通信/分发域）。品牌仿冒类信号不再直拦：
+    //     - domainBrandImpersonation（域名含品牌词）：保留 +30 计分，参与综合裁决；
+    //     - hasSdk && brandMatch && 有下载入口的模板指纹组合：改为显式计分项
+    //       templateFingerprint（+40，structure 类），见下方 add()。
     var categoryCount = Object.keys(matchedCategories).length;
-    var strongSignal = hasNoahApi || !!adseoResource || domainBrandImpersonation ||
-      (hasSdk && brandMatch && downloadLinks.length >= 1);
+    var strongSignal = hasNoahApi || !!adseoResource;
+
+    // v2.2.0：统计 SDK 与品牌冒充的模板指纹组合改为显式计分项（原强信号直拦）。
+    // 银狐冒充站模板特征保留权重但交由分层策略裁决；51.la 单独出现不拦
+    // （正规统计服务，误报主源），下载入口限定排除"挂 51.la 的品牌教程博客"
+    add('templateFingerprint', '统计 SDK 与品牌冒充模板指纹组合', 40,
+      hasSdk && !!brandMatch && downloadLinks.length >= 1,
+      hasSdk && brandMatch && downloadLinks.length >= 1 ?
+        brandMatch.name + ' + 51.la SDK + ' + downloadLinks.length + ' 个下载入口' : '',
+      'structure');
 
     // 返回完整评分结果：总分/阈值/明细/品牌信息/正版官网地址/官方标识。
     // v2.1.2 新增字段：categories（命中类别数，供后台多样性裁决）、
@@ -1821,6 +2039,9 @@ function readCachedRules() {
       categories: categoryCount, categoriesList: Object.keys(matchedCategories),
       strongSignal: strongSignal,
       icpClaimed: icpClaimed,
+      // v2.2.0：页面声明的合规备案号原文——供后台与 API 备案记录做
+      // 一致性比对（一致 -80 / 不符 +30，见 enhanceScoreAsync 三态核验）
+      icpNumber: icpLinkedMatch || icpTextMatch || '',
       brand: brandMatch ? brandMatch.name : '',
       officialUrl: brandMatch && brandMatch.officialUrls && brandMatch.officialUrls[0] || '',
       officialBadge: officialBadge
@@ -1872,6 +2093,11 @@ function readCachedRules() {
         } else if (!response.blocked && response.notice) {
           injectNoticeBanner(result);
         }
+        // v2.2.0：低权琥珀卡片——疑似风险但无结构性分发证据的放行提示。
+        // 可与警示/低权横幅叠加：卡片承载"已放行"结论，横幅承载评分层级
+        if (!response.blocked && response.card) {
+          injectNoticeCard(result);
+        }
       });
     } catch(e) { /* 扩展上下文失效时静默 */ }
   }
@@ -1920,6 +2146,13 @@ function readCachedRules() {
 
   // popup 主动查询当前页评分（"重新评分"按钮/打开弹窗时调用）
   chrome.runtime.onMessage.addListener(function(msg, sender, sendResponse) {
+    // v2.2.0：后台异步增强后总分跌破阈值 → 回撤横幅/卡片/冻结
+    //（备案核验一致 -80、老域名抵扣 -15 等负分把总分拉回 100 以下时触发）
+    if (msg.action === 'scoreDowngraded') {
+      handleScoreDowngrade(msg);
+      sendResponse({ ok: true });
+      return;
+    }
     if (msg.action === 'getPageScore') {
       brandConfigReady.then(function() { sendResponse(scorePage()); });
       return true;

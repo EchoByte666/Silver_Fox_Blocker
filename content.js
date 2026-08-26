@@ -767,17 +767,19 @@ function injectNoticeCard(result) {
   debug('content.js 低权琥珀卡片已注入（评分 ' + result.total + '）');
 }
 
-// ===== v2.2.1 评分回撤 Toast / v2.2.2 扩展为升降级双向 Toast =====
-// 分数经异步核验（备案一致 -80 / 老域名 -15 等）变化导致 UI 层级调整时，
-// 横幅/卡片/冻结状态的切换若静默发生会让用户困惑（"警告怎么没了/怎么多了"）。
-// 本 Toast 补上这一环：页面顶部居中短暂提示（Shadow DOM 防伪造），
-// 6 秒自动消退，可点击立即关闭。
-// 方向与文案（direction 由对账层按层级升降判定）：
-//   down + clear + 曾冻结 → "已解冻并刷新"
-//   down + clear          → "已解除警示与限制"
-//   down + 其他           → "已降低提示等级"
-//   up  + warn            → "已升级为警示横幅（并冻结页面交互）"
-//   up  + notice/card     → 对应的升级说明
+// ===== v2.2.1 评分回撤 Toast / v2.2.2 扩展为升降级双向 / v2.2.5 改为拦截方式变更提示 =====
+// 触发时机（v2.2.5 收窄）：仅当"拦截方式"实际切换时弹出——
+//   硬拦截跳页 / 警示横幅(冻结) / 低权横幅 / 提示卡片 / 放行 之间的互切。
+// 同一方式内的分数波动、卡片叠加增减一律静默（详见 applyScoreVerdict），
+// 另有 15 秒防抖冷却抑制阈值抖动的反复弹。文案以"防护等级变化 + 新的
+// 拦截方式"为主语，分数仅作辅助信息——用户需要知道的是"现在页面被怎么处理"。
+// 页面顶部居中短暂提示（Shadow DOM 防伪造），6 秒自动消退，可点击立即关闭。
+// 方向与文案（direction 由对账层按层级升降判定，仅在方式变更时非空）：
+//   down + clear + 曾冻结 → "已下调防护…限制已解除…正在刷新"
+//   down + clear          → "已下调防护…解除本页警示与限制"
+//   down + 其他           → "已下调防护…降低提示等级"
+//   up  + warn            → "已升级防护…警示横幅（并冻结交互）"
+//   up  + notice/card     → 对应的新方式说明
 function injectScoreChangeToast(info) {
   if (window.top !== window) return;
   if (!document.body) return;
@@ -791,26 +793,28 @@ function injectScoreChangeToast(info) {
   var root = host.attachShadow({ mode: 'closed' });
   var total = Number(info && info.total) || 0;
   var isUp = !!(info && info.direction === 'up');
+  var scoreTag = '（评分 ' + total + '/150）';
   var text;
   if (isUp) {
     if (info.level === 'blocked') {
-      text = '风险评分上调至 ' + total + '/150，已达到拦截标准，正在转入拦截页…';
+      text = '本页风险已达硬拦截标准' + scoreTag + '，正在转入拦截页…';
     } else if (info.level === 'warn') {
-      text = '风险评分上调至 ' + total + '/150，已显示警示横幅' +
-        (info.frozen ? '并冻结页面交互，请谨慎操作' : '');
+      text = '防护等级已上调：本页已改为风险警示横幅管控' + scoreTag +
+        (info.frozen ? '，并冻结页面交互，请谨慎操作' : '');
     } else if (info.level === 'notice') {
-      text = '风险评分上调至 ' + total + '/150，已显示低权提示横幅';
+      text = '防护等级已上调：本页已改为低权提示横幅管控' + scoreTag + '，请谨慎操作';
     } else {
-      text = '风险评分调整为 ' + total + '/150，已放行浏览——请核对官网后再下载文件或输入账号密码';
+      text = '防护等级已上调：本页显示风险提示卡片' + scoreTag +
+        '，请核对官网后再下载文件或输入账号密码';
     }
   } else if (info && info.level === 'clear') {
     if (info.wasFrozen) {
-      text = '风险评分已降至 ' + total + '/150，本页限制已解除，正在刷新页面…';
+      text = '防护等级已下调：本页限制已解除' + scoreTag + '，正在刷新页面…';
     } else {
-      text = '风险评分已降至 ' + total + '/150，已解除本页警示与限制，可正常浏览';
+      text = '防护等级已下调：已解除本页全部警示与限制' + scoreTag + '，可正常浏览';
     }
   } else {
-    text = '风险评分调整为 ' + total + '/150（未达拦截标准），已降低提示等级';
+    text = '防护等级已下调：本页提示等级已降低' + scoreTag;
   }
   // 升级=琥珀警示配色；降级=绿色解除配色
   var bg = isUp ? 'rgba(255,251,235,0.97)' : 'rgba(236,253,245,0.97)';
@@ -873,6 +877,12 @@ function recordAppliedUi(level, card, total) {
   appliedUiState = { level: level, card: !!card, total: Number(total) || 0 };
 }
 
+// v2.2.5 防抖冷却：拦截方式在阈值附近来回抖动时（DOM 动态增删特征导致
+// 分数反复跨越层级线），15 秒内不重复弹 Toast——UI 照常切换到最新结论，
+// 仅提示被抑制。scoreEscalated（升到硬拦截）不受此限制：它是跳转前唯一提示
+var SCORE_TOAST_COOLDOWN_MS = 15000;
+var lastScoreToastTs = 0;
+
 // 对账消息入口：后台异步增强结论到达时调用（带 Toast）
 function handleScoreAdjusted(msg) {
   applyScoreVerdict(msg, true);
@@ -881,8 +891,9 @@ function handleScoreAdjusted(msg) {
 // v2.2.4：统一裁决应用器——同步回执与异步对账共用同一套层级切换逻辑。
 // 此前同步重评路径只注入新层级 UI：不清除旧层级残留（琥珀卡片叠在横幅上）、
 // 不弹 Toast，出现"升到 80 无提示""100+ 有冻结无提示"等不对账现象
-//   allowToast=true 且非首次应用 → 层级切换伴随 Toast
-//   首次应用（appliedUiState.total 为 null）→ 一律静默，与初始拦截流程一致
+//   allowToast=true 且拦截方式（UI 层级）确实切换且非首次应用 → 弹 Toast
+//     （另受 15 秒防抖冷却约束，见 SCORE_TOAST_COOLDOWN_MS）
+//   同方式内分数波动 / 卡片增减 / 首次应用 → 一律静默，仅幂等更新 UI
 function applyScoreVerdict(msg, allowToast) {
   var level = msg && Object.prototype.hasOwnProperty.call(UI_LEVEL_RANK, msg.level)
     ? msg.level : 'clear';
@@ -892,23 +903,24 @@ function applyScoreVerdict(msg, allowToast) {
   var total = Number(msg && msg.total) || 0;
   var wantCard = !!(msg && msg.card) && level !== 'clear';
   var cur = appliedUiState;
-  // 去重：目标层级、卡片标记与总分均与当前展示一致 → 不动 UI 不弹 Toast
+  // 完全一致（层级、卡片标记、总分均相同）→ 不动 UI 不弹 Toast
   if (level === cur.level && wantCard === cur.card && total === cur.total) {
     debug('content.js scoreAdjusted 与当前展示一致，跳过 level=' + level);
     return;
   }
   var curRank = UI_LEVEL_RANK[cur.level] || 0;
   var newRank = UI_LEVEL_RANK[level] || 0;
-  // 方向判定：层级序数下降=回撤；上升=升级；同层内按卡片去留区分
-  //（加卡片视为升级提示，减卡片视为降级）
-  var direction;
-  if (newRank !== curRank) {
-    direction = newRank < curRank ? 'down' : 'up';
-  } else {
-    direction = wantCard ? 'up' : 'down';
-  }
+  var isFirstApply = cur.total === null;
+  // v2.2.5：Toast 只跟随"拦截方式"变化——拦截方式 = UI 层级
+  // （blocked 硬拦截 / warn 警示横幅 / notice 低权横幅 / card 提示卡片 / clear 放行）。
+  //   - 同一方式内的分数波动（85↔95、卡片层 65↔75）：仅静默更新文案，不弹 Toast；
+  //     旧版把同层分数变化按 wantCard 判成 up/down，是"分数一变就弹 Toast"的根因
+  //   - 卡片叠加标记（wantCard）是展示细节而非拦截方式：增减只静默处理
+  //   - 首次应用不算变更（页面初始拦截/放行本就静默）
+  var methodChanged = !isFirstApply && newRank !== curRank;
+  var direction = methodChanged ? (newRank < curRank ? 'down' : 'up') : '';
   debug('content.js 收到评分对账 ' + cur.level + '→' + level +
-    ' total=' + total + ' dir=' + direction);
+    ' total=' + total + (methodChanged ? ' dir=' + direction : '（方式未变，静默）'));
 
   // 回撤方向的冻结解除：登记窗口期并整页刷新（r3 方案，见 freezePage 注释）。
   // 先记录 wasFrozen 供 Toast 文案区分"解冻刷新"与普通回撤
@@ -955,12 +967,23 @@ function applyScoreVerdict(msg, allowToast) {
 
   recordAppliedUi(level, wantCard, total);
 
-  // 首次应用不弹 Toast（页面初始拦截/放行本就静默，与历史行为一致）；
-  // 之后每次层级切换都提示
-  if (!allowToast || cur.total === null) return;
+  // v2.2.5 Toast 触发条件（三者同时满足）：
+  //   1) allowToast（同步回执与异步对账均允许，scoreEscalated 直弹不走此处）
+  //   2) 拦截方式确实切换（methodChanged）——分数变化/卡片增减一律静默
+  //   3) 通过防抖冷却（15 秒内不重复提示，抑制阈值抖动的反复弹）
+  if (!allowToast || !methodChanged) return;
+  var now = Date.now();
+  if (now - lastScoreToastTs < SCORE_TOAST_COOLDOWN_MS) {
+    debug('content.js Toast 冷却期内（' +
+      Math.ceil((SCORE_TOAST_COOLDOWN_MS - (now - lastScoreToastTs)) / 1000) +
+      's 后恢复），仅切换 UI 不提示');
+    return;
+  }
+  lastScoreToastTs = now;
 
-  // 升降级结论 Toast（冻结场景下页面即将刷新，Toast 在刷新前短暂可见；
-  // 刷新后窗口期重评若再次对账会重新弹出）
+  // 拦截方式变更 Toast：文案以"防护等级升降 + 新的拦截方式"为主语，
+  // 让用户明确知道当前页面被以何种方式处理（冻结场景下页面即将刷新，
+  // Toast 在刷新前短暂可见；刷新后首次应用静默，不会重复弹出）
   injectScoreChangeToast({
     direction: direction,
     level: level,
@@ -2288,11 +2311,12 @@ function readCachedRules() {
         }
         if (response.blocked) return; // 硬拦截跳转中，页面 UI 无需调整
         // v2.2.4：同步回执统一走 applyScoreVerdict——与异步对账共用同一套
-        // 层级切换逻辑。DOM 重评使层级变化时（如动态挂载的特征把 70 分推上
-        // 85/120），自动清除旧层级残留 UI 并弹升降 Toast；首次应用静默，
-        // 与初始拦截/放行流程的历史行为一致。
+        // 层级切换逻辑。DOM 重评使拦截方式变化时（如动态挂载的特征把 70 分
+        // 推上 85/120 跨层级），自动清除旧层级残留 UI；v2.2.5 起 Toast 仅在
+        // 拦截方式（UI 层级）实际切换时弹出并带 15 秒防抖冷却，同方式内的
+        // 分数波动静默处理；首次应用静默，与初始拦截/放行流程的历史行为一致。
         // effectiveTotal = 后台实际用于判定的总分（可能已被增强终局结论
-        // 替换），用它记录状态才能与异步对账的去重比较保持一致
+        // 替换），用它记录状态才能与异步对账的状态比较保持一致
         var effTotal = (response.effectiveTotal != null) ?
           Number(response.effectiveTotal) : result.total;
         applyScoreVerdict({

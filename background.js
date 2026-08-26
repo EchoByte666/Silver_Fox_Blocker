@@ -696,7 +696,8 @@ async function enhanceScoreAsync(tabId, url, result) {
     // AIGC/UGC 文本而非页脚声明，"盗用备案"+30/"查无备案"+20 惩罚不生效。
     // v2.4.0：UGC 平台（ugcPage）同列豁免——帖子里粘贴的备案号同样是内容
     const ageInfo = await queryDomainAge(domain);
-    const icpInfo = (result.icpClaimed && !(result.aiChatPage || result.ugcPage))
+    const icpInfo = (result.icpClaimed &&
+        !(result.aiChatPage || result.ugcPage || result.secForum))
       ? await queryIcpRecord(domain)
       : skipIcpQueryResult();
 
@@ -913,7 +914,8 @@ function applyBrandCheck(result, url) {
     return hostname === platformDomain || hostname.endsWith('.' + platformDomain);
   }) || SEARCH_ENGINE_DOMAINS.some(function(searchDomain) {
     return hostname === searchDomain || hostname.endsWith('.' + searchDomain);
-  }) || isAiChatHostname(hostname) || isUgcHostname(hostname)) return result;
+  }) || isAiChatHostname(hostname) || isUgcHostname(hostname) ||
+    isSecurityForumHostname(hostname)) return result;
   const title = String(result.title || '').toLowerCase().replace(/\s+/g, '');
   const brandHint = String(result.brand || '').toLowerCase().replace(/\s+/g, '');
   let matchedBrand = null;
@@ -1120,6 +1122,26 @@ const UGC_PLATFORM_DOMAINS = [
 function isUgcHostname(hostname) {
   hostname = String(hostname || '').toLowerCase().replace(/^\.+|\.+$/g, '');
   return UGC_PLATFORM_DOMAINS.some(function(domain) {
+    return hostname === domain || hostname.endsWith('.' + domain);
+  });
+}
+
+// ===== v2.5.0：安全研究论坛表 =====
+// 卡饭/看雪/52pojie/T00ls 等（详见 content.js 同名表注释，两处同步）。
+// 后台侧影响：applyBrandCheck 整体跳过——论坛帖子高频提及杀软品牌是
+// 讨论/评测语境不是冒充；enhanceScoreAsync 经 secForum 标记跳过 ICP API
+// 核验。前台另有提示卡片与站外链接拦截（content.js 末尾模块）
+const SECURITY_FORUM_DOMAINS = [
+  'kafan.cn',       // 卡饭论坛
+  'pediy.com',      // 看雪学院
+  '52pojie.cn',     // 吾爱破解论坛
+  't00ls.com',      // T00ls 安全小组
+  't00ls.net'       // T00ls 备用域
+];
+
+function isSecurityForumHostname(hostname) {
+  hostname = String(hostname || '').toLowerCase().replace(/^\.+|\.+$/g, '');
+  return SECURITY_FORUM_DOMAINS.some(function(domain) {
     return hostname === domain || hostname.endsWith('.' + domain);
   });
 }

@@ -194,6 +194,31 @@ function isUgcHostname(hostname) {
   });
 }
 
+// ===== v2.5.0：安全研究论坛表 =====
+// 卡饭/看雪/52pojie/T00ls 等安全技术论坛：帖子内容是专业 UGC 且天然高频
+// 提及杀软品牌、样本行为、备案号等——文本启发式全部失真，与 UGC 同列豁免
+// （仅保留 noah/adseo 等强特征与黑名单/DNR 拦截层）。特有逻辑：
+//   1) 进入论坛即注入顶部提示卡片（面向小白的完整风险告知），
+//      支持「我知道了」（本次收起）与「一键加白此论坛」（永久，写 storage
+//      的 whitelist 键，与 popup/warning 页同一协议）；
+//   2) 未加白时点击任何跨站外链弹窗拦截确认，支持「仅本次允许访问」；
+//   3) 不激活外链徽标核查通道（aiChatActive 不含本表）。
+// 注意：background.js 中有相同列表（applyBrandCheck 用），修改时需两处同步
+const SECURITY_FORUM_DOMAINS = [
+  'kafan.cn',       // 卡饭论坛（bbs.kafan.cn 等）
+  'pediy.com',      // 看雪学院（bbs.pediy.com 等）
+  '52pojie.cn',     // 吾爱破解论坛
+  't00ls.com',      // T00ls 安全小组
+  't00ls.net'       // T00ls 备用域
+];
+
+function isSecurityForumHostname(hostname) {
+  hostname = String(hostname || '').toLowerCase().replace(/^\.+|\.+$/g, '');
+  return SECURITY_FORUM_DOMAINS.some(function(domain) {
+    return hostname === domain || hostname.endsWith('.' + domain);
+  });
+}
+
 // ===== v2.1.0：官方标识检测（降误报核心）=====
 // 检测页面是否挂有"党政机关/事业单位"官方标识——此类标识由机构申请并
 // 挂载在页脚（典型形态见 CONAC 全国党政机关事业单位互联网网站标识：
@@ -1727,7 +1752,8 @@ function readCachedRules() {
     // 黑名单与强特征（noah/adseo）检测不受影响
     var isAiChatPage = isAiChatHostname(host);
     var isUgcPage = isUgcHostname(host);
-    var isTrustedContentPlatform = isAiChatPage || isUgcPage;
+    var isSecForumPage = isSecurityForumHostname(host);
+    var isTrustedContentPlatform = isAiChatPage || isUgcPage || isSecForumPage;
 
     // ---- 话术类指标 ----
     // "官方/安全/正版"三类话术齐备。
@@ -2396,6 +2422,9 @@ function readCachedRules() {
       aiChatPage: isAiChatPage,
       // v2.4.0：UGC 平台标记——后台 enhanceScoreAsync 据此跳过 ICP API 核验
       ugcPage: isUgcPage,
+      // v2.5.0：安全研究论坛标记——同列 ICP 豁免；前台另注入提示卡片
+      // 并拦截未加白状态的站外链接（见文件末尾安全论坛模块）
+      secForum: isSecForumPage,
       // v2.2.0：页面声明的合规备案号原文——供后台与 API 备案记录做
       // 一致性比对（一致 -80 / 不符 +30，见 enhanceScoreAsync 三态核验）
       icpNumber: icpLinkedMatch || icpTextMatch || '',
@@ -2818,4 +2847,185 @@ function readCachedRules() {
   // 初始扫描兜底：load 后延迟一次（等首批对话内容渲染完成）；
   // 后续增量内容由 MutationObserver → scheduleLinkScan 驱动
   if (aiChatActive) setTimeout(runLinkScan, 1200);
+
+  // ===== v2.5.0：安全研究论坛提示卡片与站外链接防护 =====
+  var secForumActive = (window.top === window) && isSecurityForumHostname(location.hostname);
+  if (secForumActive) {
+    var SEC_FORUM_REG = getRegistrableDomain(location.hostname) || location.hostname;
+    var secForumWhitelisted = false;
+    var secForumBannerHost = null;
+
+    // 与 popup/warning 页同一协议：规范化去重后写 storage.local 的 whitelist 键，
+    // background 的 storage.onChanged 监听器自动同步缓存与 DNR allow 规则
+    function secForumAddWhitelist(done) {
+      try {
+        chrome.storage.local.get('whitelist', function(stored) {
+          var wl = ((stored && stored.whitelist) || []).map(function(d) {
+            return String(d || '').toLowerCase().replace(/^\*\./, '').replace(/^\.+|\.+$/g, '');
+          }).filter(function(d, i, a) { return d && a.indexOf(d) === i; });
+          if (wl.indexOf(SEC_FORUM_REG) === -1) wl.push(SEC_FORUM_REG);
+          chrome.storage.local.set({ whitelist: wl }, function() {
+            if (chrome.runtime.lastError) { done(false); return; }
+            secForumWhitelisted = true;
+            removeSecForumBanner();
+            done(true);
+          });
+        });
+      } catch(e) { done(false); }
+    }
+
+    function removeSecForumBanner() {
+      if (secForumBannerHost && secForumBannerHost.parentNode) {
+        secForumBannerHost.parentNode.removeChild(secForumBannerHost);
+      }
+      secForumBannerHost = null;
+    }
+
+    // ---- 顶部提示卡片（closed Shadow DOM，与验证卡片/横幅同一实现约定）----
+    function injectSecForumNotice() {
+      if (secForumBannerHost || !document.documentElement) return;
+      var host = document.createElement('div');
+      host.style.cssText = 'all:initial;position:fixed;top:0;left:0;right:0;z-index:2147483646;pointer-events:none;';
+      try { var sh = host.attachShadow({ mode: 'closed' }); } catch(e) { return; }
+      sh.innerHTML =
+        '<style>' +
+        '.sf-card{pointer-events:auto;margin:10px auto;max-width:720px;width:calc(100% - 24px);' +
+        'background:#1f2732;color:#e8eaed;border-radius:12px;padding:14px 18px;' +
+        'box-shadow:0 6px 24px rgba(0,0,0,.35);font:13px/1.7 system-ui,sans-serif;border:1px solid #3c4a5d}' +
+        '.sf-head{display:flex;align-items:center;gap:8px;font-size:15px;font-weight:700;color:#ffd54f}' +
+        '.sf-txt{margin-top:8px;color:#cfd8e3}' +
+        '.sf-txt b{color:#fff}' +
+        '.sf-txt .warn{color:#ff8a80;font-weight:700}' +
+        '.sf-ops{margin-top:12px;display:flex;gap:10px;flex-wrap:wrap}' +
+        'button{cursor:pointer;border:none;border-radius:8px;padding:8px 16px;font-size:13px;font-weight:600}' +
+        '.ok{background:#3ddc84;color:#10231a}.wl{background:#8ab4f8;color:#0b2544}' +
+        '.hint{margin-top:8px;font-size:12px;color:#9aa7b6}' +
+        '</style>' +
+        '<div class="sf-card" role="alertdialog" aria-label="安全论坛提示">' +
+        '<div class="sf-head"><svg width="18" height="18" viewBox="0 0 24 24" fill="#ffd54f"><path d="M12 2L4 5v6c0 5.25 3.4 10.15 8 11 4.6-.85 8-5.75 8-11V5l-8-3z"/></svg>' +
+        '这里是安全技术研究论坛（' + SEC_FORUM_REG + '）</div>' +
+        '<div class="sf-txt">论坛帖子中的附件、工具、"破解软件"、样本可能包含<b>真实木马与恶意程序</b>' +
+        '（包括银狐木马——常借"远控工具/破解补丁/游戏外挂"名义传播），仅供安全研究人员在隔离环境中分析。' +
+        '<span class="warn">请勿下载运行任何附件，不要随意点击站外链接</span>——除非你确切知道自己在做什么。</div>' +
+        '<div class="sf-ops"><button class="ok">我知道了</button><button class="wl">一键加白此论坛（不再提示与拦截）</button></div>' +
+        '<div class="hint">点击站外链接时本扩展会再次向你确认；加白后此提示与本保护同时关闭。</div>' +
+        '</div>';
+      sh.querySelector('.ok').addEventListener('click', removeSecForumBanner);
+      sh.querySelector('.wl').addEventListener('click', function() {
+        this.disabled = true; this.textContent = '添加中…';
+        secForumAddWhitelist(function(ok) {
+          if (!ok && sh.querySelector('.wl')) sh.querySelector('.wl').textContent = '添加失败，请重试';
+        });
+      });
+      document.documentElement.appendChild(host);
+      secForumBannerHost = host;
+    }
+
+    // ---- 站外链接拦截弹窗（未加白时）----
+    var secModalHost = null;
+    function closeSecForumModal(navigateUrl, newTab) {
+      if (!secModalHost) return;
+      if (secModalHost._parent && secModalHost._parentNode) {
+        secModalHost._parentNode.removeChild(secModalHost);
+      }
+      secModalHost = null;
+      if (navigateUrl) {
+        if (newTab) window.open(navigateUrl, '_blank', 'noopener');
+        else location.href = navigateUrl;
+      }
+    }
+
+    function showSecForumLeaveModal(url, newTab) {
+      closeSecForumModal(null);
+      if (!document.documentElement) return;
+      var targetHost = '';
+      try { targetHost = new URL(url).hostname; } catch(e) { /* */ }
+      var host = document.createElement('div');
+      host.style.cssText = 'all:initial;position:fixed;inset:0;z-index:2147483647;';
+      try { var sh = host.attachShadow({ mode: 'closed' }); } catch(e) { return; }
+      sh.innerHTML =
+        '<style>.ov{position:absolute;inset:0;background:rgba(0,0,0,.55);display:flex;' +
+        'align-items:center;justify-content:center;font:13px/1.7 system-ui,sans-serif;padding:16px}' +
+        '.box{background:#1f2732;color:#e8eaed;max-width:520px;width:100%;border-radius:12px;' +
+        'padding:20px 22px;box-shadow:0 10px 40px rgba(0,0,0,.5);border:1px solid #3c4a5d}' +
+        'h3{margin:0 0 10px;font-size:15px;color:#ff8a80;display:flex;align-items:center;gap:8px}' +
+        '.url{word-break:break-all;background:#12181f;border-radius:8px;padding:8px 10px;color:#8ab4f8;margin:8px 0;font-size:12px}' +
+        '.ops{display:flex;gap:10px;margin-top:14px;flex-wrap:wrap}' +
+        'button{cursor:pointer;border:none;border-radius:8px;padding:9px 16px;font-size:13px;font-weight:600}' +
+        '.cancel{background:#3c4a5d;color:#e8eaed}.once{background:#fbbc04;color:#3c2e00}' +
+        '.forever{background:#8ab4f8;color:#0b2544}</style>' +
+        '<div class="ov"><div class="box" role="dialog" aria-modal="true">' +
+        '<h3><svg width="16" height="16" viewBox="0 0 24 24" fill="#ff8a80"><path d="M12 2L4 5v6c0 5.25 3.4 10.15 8 11 4.6-.85 8-5.75 8-11V5l-8-3z"/></svg>' +
+        '你正在从安全论坛离开，前往外部网站</h3>' +
+        '<div>目标：</div><div class="url"></div>' +
+        '<div>安全论坛的站外链接可能指向<b style="color:#ff8a80">木马、钓鱼或仿冒页面</b>；' +
+        '投毒团伙常在此类社区借"工具/补丁"外链传播银狐木马。下载文件请优先使用站内附件并核对哈希值。</div>' +
+        '<div class="ops"><button class="cancel">取消</button>' +
+        '<button class="once">仅本次允许访问</button>' +
+        '<button class="forever">永久加白论坛（关闭本保护）</button></div>' +
+        '</div></div>';
+      sh.querySelector('.url').textContent = url + (targetHost ? '　（域名：' + targetHost + '）' : '');
+      sh.querySelector('.cancel').addEventListener('click', function() { closeSecForumModal(null); });
+      sh.querySelector('.once').addEventListener('click', function() { closeSecForumModal(url, newTab); });
+      sh.querySelector('.forever').addEventListener('click', function() {
+        this.disabled = true; this.textContent = '添加中…';
+        secForumAddWhitelist(function() { closeSecForumModal(null); });
+      });
+      document.documentElement.appendChild(host);
+      secModalHost = host;
+      secModalHost._parent = true;
+      secModalHost._parentNode = document.documentElement;
+    }
+
+    // 跨站外链判定：http(s) 且注册域不同于当前注册域
+    function secForumExternalHref(anchorEl) {
+      var href = anchorEl.getAttribute('href') || '';
+      if (!/^https?:\/\//i.test(href)) return null;
+      var u = null;
+      try { u = new URL(href, location.href); } catch(e) { return null; }
+      var reg = getRegistrableDomain(u.hostname.toLowerCase());
+      if (!reg || reg === SEC_FORUM_REG) return null;
+      return u.href;
+    }
+
+    function secForumClickGuard(e) {
+      if (secForumWhitelisted) return;
+      // click 只处理主键；auxclick 处理中键（新标签打开）
+      if (e.type === 'click' && e.button !== 0) return;
+      if (e.type === 'auxclick' && e.button !== 1) return;
+      var el = e.target;
+      while (el && el !== document && el.tagName !== 'A') el = el.parentElement;
+      if (!el || el === document) return;
+      var url = secForumExternalHref(el);
+      if (!url) return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      showSecForumLeaveModal(url, el.target === '_blank' || e.type === 'auxclick');
+    }
+    document.addEventListener('click', secForumClickGuard, true);
+    document.addEventListener('auxclick', secForumClickGuard, true);
+
+    // 初始化：查白名单决定是否注入提示卡与启用拦截
+    try {
+      chrome.storage.local.get('whitelist', function(stored) {
+        var wl = ((stored && stored.whitelist) || []).map(function(d) {
+          return String(d || '').toLowerCase().replace(/^\*\./, '').replace(/^\.+|\.+$/g, '');
+        });
+        secForumWhitelisted = wl.some(function(entry) {
+          return entry && (
+            entry === SEC_FORUM_REG ||
+            location.hostname === entry ||
+            location.hostname.endsWith('.' + entry));
+        });
+        if (!secForumWhitelisted) {
+          if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', injectSecForumNotice, { once: true });
+          } else {
+            injectSecForumNotice();
+          }
+        }
+        debug('content.js 安全论坛防护就绪 whitelisted=' + secForumWhitelisted);
+      });
+    } catch(e) { /* 扩展上下文失效 */ }
+  }
 })();

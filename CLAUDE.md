@@ -35,6 +35,7 @@ Chrome/Edge MV3 浏览器扩展：拦截"银狐"木马钓鱼/仿冒网站。
 - 默认白名单：background.js `DEFAULT_WHITELIST` 与 popup.js `BUILT_IN_WHITELIST`
 - `AI_CHAT_PLATFORM_DOMAINS` / `isAiChatHostname`（v2.3.0 可信 AI 对话平台豁免）：background.js 与 content.js 各一份，修改需两处同步；豁免语义=跳过品牌匹配 + manyEmoji/officialSpeech 不加分 + ICP 三通道与后台 API 核验全跳过，黑名单/DNR 层不受影响
 - `UGC_PLATFORM_DOMAINS` / `isUgcHostname`（v2.4.0 UGC 平台豁免，bilibili/weibo 等 29 个自营域含 t.cn/b23.tv 短链）：background.js 与 content.js 各一份需两处同步；豁免语义与 AI 对话相同（品牌/表情/话术/ICP 四类文本启发式全跳过），另激活外链核查通道且单批上限 30（AI 对话为 15）——评论区是银狐投毒主渠道，核查不可关
+- `SECURITY_FORUM_DOMAINS` / `isSecurityForumHostname`（v2.5.0 安全研究论坛，kafan/pediy/52pojie/t00ls 五域）：background.js 与 content.js 各一份需两处同步；文本启发式豁免与 UGC 相同但**不激活**外链徽标通道；特有=进入即注入提示卡片（一键加白写 storage.local whitelist 键）+ 未加白时捕获阶段拦截跨站外链弹确认窗（支持仅本次访问），模块在 content.js IIFE 末尾
 - `matchesPatternDomain` / `isGovCn` / `levenshteinWithin1` 等工具函数在 background.js 与 content.js 各有一份，语义需保持一致
 - `isShortLatinKeyword` / `shortKeywordBoundaryHit` / `brandDomainKeywordHit`（v2.3.9 短词强边界防子串碰撞，cline.bot 误判 LINE 的修复）：background.js 与 content.js 各一份需同步；语义=短拉丁关键词（<5 字符，如远程库 LINE 的 "line"）在域名上仅认注册段整段/连字符·下划线·数字切分段匹配、在文本上仅认词边界命中；≥5 字符长词保持宽松子串口径不变
 - `uiLevelOf`（UI 层级判定 warn/notice/card/clear）：background.js 同步决策与 enhanceScoreAsync 对账共用同一规则，修改阈值时两处及 content.js 展示层同步

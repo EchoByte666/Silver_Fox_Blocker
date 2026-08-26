@@ -2452,6 +2452,14 @@ function readCachedRules() {
       brandConfigReady.then(function() { sendResponse(scorePage()); });
       return true;
     }
+    // v2.3.4：AI 外链核查第二阶段——ICP 备案核验完成后的终局结论推送，
+    // 据注册表找回原锚点，原位把"ICP核验中"动画替换为最终徽标
+    if (msg.action === 'aiLinkVerdict' && msg.url) {
+      const anchorEl = aiChatAnchorByUrl && aiChatAnchorByUrl.get(msg.url);
+      if (anchorEl && anchorEl.isConnected) injectLinkBadge(anchorEl, msg.verdict || {});
+      sendResponse({ ok: true });
+      return;
+    }
   });
 
   // 品牌库就绪后开始首轮评分（DOM 加载完成或已加载完成）
@@ -2475,6 +2483,9 @@ function readCachedRules() {
   var aiChatActive = (window.top === window) && isAiChatHostname(location.hostname);
   var linkScanTimer = null;
   var processedAnchors = typeof WeakMap !== 'undefined' ? new WeakMap() : null;
+  // v2.3.4：url → 锚点注册表——后台 ICP 核验完成后经 aiLinkVerdict 消息
+  // 推送终局结论，据此找到原锚点原位刷新徽标（超容量整体清空防泄漏）
+  var aiChatAnchorByUrl = typeof Map !== 'undefined' ? new Map() : null;
   var LINK_SCAN_MAX_PER_BATCH = 15;
 
   function scheduleLinkScan() {
@@ -2511,8 +2522,14 @@ function readCachedRules() {
     if (!aiChatActive) return;
     var items = collectExternalLinks();
     if (!items.length) return;
-    // 先挂"检测中"占位徽标（蓝点脉冲动画），后台回执后在原位替换为结论
+    // 先挂"检测中"占位徽标（蓝点脉冲动画）；疑似仿冒域名后台会转入
+    // ICP 备案核验第二阶段，届时回执 pendingIcp 过渡态换"ICP核验中"动画，
+    // 终局结论再经 aiLinkVerdict 消息推回原位刷新
     items.forEach(function(item) {
+      if (aiChatAnchorByUrl) {
+        if (aiChatAnchorByUrl.size > 400) aiChatAnchorByUrl.clear();
+        aiChatAnchorByUrl.set(item.url, item.anchor);
+      }
       injectLinkBadge(item.anchor, { level: 'pending' });
     });
     try {
@@ -2570,13 +2587,17 @@ function readCachedRules() {
         warn:    { color: '#e8710a', label: '可疑',   cls: 'b warn' },
         safe:    { color: '#188038', label: '',       cls: 'b plain' },
         unknown: { color: '#9aa0a6', label: '',       cls: 'b plain' },
-        pending: { color: '#1a73e8', label: '检测中', cls: 'b pending' }
+        pending: { color: '#1a73e8', label: '检测中', cls: 'b pending' },
+        // v2.3.4：第二阶段过渡态——沙箱探测已过、正在核验 ICP 备案
+        //（琥珀点脉冲，与探测阶段的蓝点区分开）
+        pendingIcp: { color: '#f9ab00', label: 'ICP核验中', cls: 'b pending' }
       };
       var m = META[verdict.level] || META.unknown;
       var probeText = verdict.level === 'pending'
         ? '正在后台沙箱探测…'
         : (verdict.probed ? '已沙箱访问（无 Cookie / 无 Referer）' : '未发起网络访问');
-      var levelTitle = verdict.level === 'pending' ? '' :
+      var levelTitle =
+        verdict.level === 'pending' || verdict.level === 'pendingIcp' ? '' :
         verdict.level === 'danger' ? '—— 高风险，建议勿访问' :
         verdict.level === 'warn' ? '—— 存在可疑特征' :
         verdict.level === 'safe' ? '—— 可信域名' : '—— 未发现已知风险';

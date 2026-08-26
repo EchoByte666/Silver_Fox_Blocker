@@ -2259,7 +2259,11 @@ try {
 // aiLinkSuspicionReasons）：高滥用 TLD / http 明文 / IP 直连 / punycode /
 // 非 ASCII 域名 / 注册标签含连字符 / 深子域 / 超长主机名，命中任一即探测。
 // v2.3.3：域名品牌词仿冒（aiLinkBrandImpersonation，含编辑距离 ≤1 变体）
-// 同样纳入触发，且置于原因首位。探测全程防追踪：
+// 同样纳入触发，且置于原因首位。
+// v2.3.4：疑似仿冒不再直接定可疑——转入第二阶段 ICP 备案核验裁决
+//（verifyIcpForAiLink）：有有效备案 → 嫌疑解除；查无备案 → 仿冒坐实。
+// 核验期间回执 pendingIcp 过渡态，终局结论经 aiLinkVerdict 推回标签页。
+// 探测全程防追踪：
 //   credentials:'omit'          不携带任何 Cookie/凭证
 //   referrerPolicy:'no-referrer' 不泄露来源页（对话内容不出本机）
 //   cache:'no-store'            不读写 HTTP 缓存
@@ -2384,6 +2388,38 @@ async function sandboxProbeUrl(url) {
   }
 }
 
+// v2.3.4：AI 外链仿冒嫌疑的 ICP 备案裁决——品牌关键词命中只是弱证据
+//（todeskai.com 这类"含品牌词但真实运营"的域名很常见），不能直接定可疑。
+// 用既有 queryIcpRecord 查注册域备案：有有效备案 → 主体真实存在，嫌疑解除；
+// 查无备案 → 仿冒坐实；API 不可用 → 保守回落 warn。
+// 同注册域并发去重（多条链接指向同一站点只查一次）；queryIcpRecord 自带
+// 当日缓存与失败 5 分钟短缓存，此处仅做 Promise 级去重
+const _aiLinkIcpInFlight = new Map();
+function verifyIcpForAiLink(registrable, hostname, susTag, httpStatus, finalHost) {
+  let p = _aiLinkIcpInFlight.get(registrable);
+  if (!p) {
+    p = queryIcpRecord(registrable).catch(function() { return { queried: false }; });
+    _aiLinkIcpInFlight.set(registrable, p);
+    p.then(function() { _aiLinkIcpInFlight.delete(registrable); }, function() { /* */ });
+  }
+  return p.then(function(icpInfo) {
+    if (icpInfo && icpInfo.queried && icpInfo.hasIcp) {
+      return { level: 'unknown', host: hostname, probed: true,
+        reason: susTag + '；但该域名已持有有效 ICP 备案（' +
+          (icpInfo.icpNumber || '备案号未知') + '），主体真实存在，仿冒嫌疑解除' };
+    }
+    if (icpInfo && icpInfo.queried && !icpInfo.hasIcp) {
+      return { level: 'warn', host: hostname, probed: true,
+        reason: susTag + '；且查无 ICP 备案记录，仿冒嫌疑加重，请勿当作官网访问' };
+    }
+    const redirectNote = finalHost && finalHost !== hostname
+      ? '，重定向至 ' + finalHost : '';
+    return { level: 'warn', host: hostname, probed: true,
+      reason: susTag + '；ICP 备案核验暂不可用，请谨慎访问（HTTP ' +
+        httpStatus + redirectNote + '）' };
+  });
+}
+
 async function classifyAiChatLink(url) {
   const cached = getCachedAiLinkVerdict(url);
   if (cached) return cached;
@@ -2438,16 +2474,47 @@ async function classifyAiChatLink(url) {
     return cacheAiLinkVerdict(url, { level: 'danger', host: hostname, probed: true,
       reason: susTag + '，且重定向至恶意域名：' + finalHost });
   }
+  // v2.3.4：疑似仿冒不直接定可疑——转入第二阶段 ICP 备案核验裁决。
+  // 返回两段式结果：{ interim, final } 由 handleAiChatLinkScan 先回执
+  // 过渡态（content 显示 ICP 核验中动画）、再把终局结论推回标签页；
+  // 其余路径仍返回单一终局 verdict
+  if (impersonatedBrand) {
+    const registrable = getRegistrableDomain(hostname) || hostname;
+    return {
+      interim: { level: 'pendingIcp', host: hostname, probed: true,
+        reason: susTag + '；正在核验 ICP 备案…' },
+      final: verifyIcpForAiLink(registrable, hostname, susTag,
+        probe.status, finalHost)
+    };
+  }
   return cacheAiLinkVerdict(url, { level: 'warn', host: hostname, probed: true,
     reason: susTag + '（HTTP ' + probe.status +
       (finalHost && finalHost !== hostname ? '，重定向至 ' + finalHost : '，可直接访问') + '）' });
 }
 
-async function handleAiChatLinkScan(urls) {
+async function handleAiChatLinkScan(urls, tabId) {
   const list = (Array.isArray(urls) ? urls : []).slice(0, AI_LINK_BATCH_MAX);
   const results = {};
   for (const url of list) {
-    try { results[url] = await classifyAiChatLink(url); }
+    try {
+      const outcome = await classifyAiChatLink(url);
+      // v2.3.4：两段式结果——interim 为"ICP 核验中"过渡态立即回执；
+      // 终局结论完成后缓存并经 tabs.sendMessage 推回标签页实时刷新徽标
+      if (outcome && outcome.interim) {
+        results[url] = outcome.interim;
+        outcome.final.then(function(verdict) {
+          cacheAiLinkVerdict(url, verdict);
+          if (tabId == null) return;
+          try {
+            chrome.tabs.sendMessage(tabId,
+              { action: 'aiLinkVerdict', url: url, verdict: verdict },
+              function() { void chrome.runtime.lastError; });
+          } catch(e) { /* */ }
+        }).catch(function() { /* */ });
+      } else {
+        results[url] = outcome || { level: 'unknown', reason: '核查异常', probed: false };
+      }
+    }
     catch(e) { results[url] = { level: 'unknown', reason: '核查异常', probed: false }; }
   }
   return results;
@@ -2458,7 +2525,7 @@ chrome.runtime.onMessage.addListener(function(msg, sender, sendResponse) {
   // v2.3.0：AI 对话页外链核查（content.js 仅在可信 AI 对话平台发送）。
   // 静态分级即时返回；可疑模式域名的沙箱探测异步完成后一并回执
   if (msg.action === 'scanAiChatLinks') {
-    handleAiChatLinkScan(msg.urls).then(function(results) {
+    handleAiChatLinkScan(msg.urls, sender.tab && sender.tab.id).then(function(results) {
       sendResponse({ ok: true, results: results });
     }).catch(function() {
       sendResponse({ ok: false });  // 兜底：防止发送方永久挂起

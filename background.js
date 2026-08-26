@@ -2258,7 +2258,8 @@ try {
 // v2.3.2：探测触发从单一"连字符模式"扩展为多信号（见
 // aiLinkSuspicionReasons）：高滥用 TLD / http 明文 / IP 直连 / punycode /
 // 非 ASCII 域名 / 注册标签含连字符 / 深子域 / 超长主机名，命中任一即探测。
-// 探测全程防追踪：
+// v2.3.3：域名品牌词仿冒（aiLinkBrandImpersonation，含编辑距离 ≤1 变体）
+// 同样纳入触发，且置于原因首位。探测全程防追踪：
 //   credentials:'omit'          不携带任何 Cookie/凭证
 //   referrerPolicy:'no-referrer' 不泄露来源页（对话内容不出本机）
 //   cache:'no-store'            不读写 HTTP 缓存
@@ -2319,6 +2320,48 @@ function aiLinkSuspicionReasons(hostname) {
   return reasons;
 }
 
+// v2.3.3：链接侧品牌仿冒判定——AI 给出的链接若域名含某品牌英文关键词
+// （或注册标签与关键词编辑距离 ≤1，覆盖 huorrong 双写 r 类拼写变体），
+// 却不在该品牌的官方/可信域上，即为典型 typosquatting 特征。
+// 与 applyBrandCheck 同一套两遍扫描口径：第一遍官方/可信域全量放行，
+// 第二遍才取第一个命中品牌，防止正版站被前面品牌的关键词短路误判。
+// 链接侧无页面标题可比，仅做域名维度判定（页面维度由 scorePage 覆盖）。
+// 返回命中的品牌名（未命中返回 null）
+function aiLinkBrandImpersonation(hostname) {
+  if (!Array.isArray(cache.brandConfig) || !cache.brandConfig.length) return null;
+  const hostMatchesDomain = function(domain) {
+    domain = String(domain).toLowerCase();
+    return hostname === domain || hostname.endsWith('.' + domain);
+  };
+  const onOfficialSite = cache.brandConfig.some(function(rule) {
+    return (rule.officialDomains || []).some(hostMatchesDomain) ||
+      (rule.trustedDomains || []).some(hostMatchesDomain);
+  });
+  if (onOfficialSite) return null;
+  let hitBrand = null;
+  cache.brandConfig.some(function(rule) {
+    return (rule.keywords || []).some(function(keyword) {
+      const kw = String(keyword).toLowerCase();
+      // 仅纯拉丁数字关键词参与域名比对（中文词不会出现在域名里）
+      if (kw.length < 3 || !/^[a-z0-9]+$/.test(kw)) return false;
+      if (hostname.indexOf(kw) !== -1) { hitBrand = rule.name; return true; }
+      // 编辑距离路径：取域名主体段（处理 com.cn 双段后缀）比对
+      if (kw.length >= 6) {
+        const labels = hostname.split('.');
+        const tld = labels[labels.length - 1];
+        const second = labels.length >= 2 ? labels[labels.length - 2] : '';
+        const isCnDouble = tld === 'cn' && ['com','net','org','gov','edu','ac'].includes(second);
+        const cut = isCnDouble ? 2 : 1;
+        const registrable = labels.length > cut ? labels[labels.length - cut - 1] : labels[0] || '';
+        if (registrable && Math.abs(registrable.length - kw.length) <= 1 &&
+            levenshteinWithin1(registrable, kw)) { hitBrand = rule.name; return true; }
+      }
+      return false;
+    });
+  });
+  return hitBrand;
+}
+
 // 沙箱防追踪探测：跟随重定向取最终落点，不读响应体，8 秒超时
 async function sandboxProbeUrl(url) {
   const controller = new AbortController();
@@ -2370,8 +2413,12 @@ async function classifyAiChatLink(url) {
     return cacheAiLinkVerdict(url, { level: 'danger', host: hostname, probed: false,
       reason: '恶意域名黑名单命中' });
   }
-  // v2.3.2：多信号可疑判定 + http 明文链接；均未命中才落灰不查
+  // v2.3.2：多信号可疑判定 + http 明文链接；均未命中才落灰不查。
+  // v2.3.3：域名品牌词仿冒（含编辑距离变体）同样纳入探测触发，
+  // 且置于原因首位——这是对话场景里最高危的钓鱼形态（假官网引导下载）
   const susReasons = aiLinkSuspicionReasons(hostname);
+  const impersonatedBrand = aiLinkBrandImpersonation(hostname);
+  if (impersonatedBrand) susReasons.unshift('疑似仿冒「' + impersonatedBrand + '」官网域名');
   if (parsed.protocol === 'http:') susReasons.push('HTTP 明文链接');
   if (!susReasons.length) {
     return cacheAiLinkVerdict(url, { level: 'unknown', host: hostname, probed: false,

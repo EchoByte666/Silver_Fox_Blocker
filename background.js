@@ -256,6 +256,33 @@ function levenshteinWithin1(a, b) {
   return rest1 === rest2;
 }
 
+// ===== v2.3.9：品牌关键词匹配防子串碰撞（三个工具函数与 content.js 同步）=====
+// 远程品牌库存在短英文词（如 LINE 的 "line"）——"cline.bot"、"online"、
+// "deadline"、"linear" 都包含子串 "line"，裸 indexOf/includes 会把大量无关
+// 站点误判为仿冒（cline.bot 实测被判 LINE 仿冒并进入 ICP 核验落橙）。
+// 短词（<5 字符纯拉丁）只在强边界下采信：
+//   - 域名：注册段整体等于关键词，或按 连字符/下划线/数字 切分后某段
+//     整体等于关键词（line-app.top / line2024.com 命中；cline.bot /
+//     linear.app 不命中）
+//   - 文本：词边界匹配（两侧非 [a-z0-9] 或端点）。必须基于未去空格的
+//     原文判定——规范化文本已剥空白，词边界信息不可恢复
+function isShortLatinKeyword(kw) {
+  return kw.length < 5 && /^[a-z0-9]+$/.test(kw);
+}
+
+function shortKeywordBoundaryHit(kw, rawText) {
+  return new RegExp('(^|[^a-z0-9])' + kw + '([^a-z0-9]|$)')
+    .test(String(rawText || '').toLowerCase());
+}
+
+function brandDomainKeywordHit(kw, hostname, registrable) {
+  if (String(hostname).indexOf(kw) === -1) return false;
+  if (!isShortLatinKeyword(kw)) return true;
+  const label = String(registrable || '');
+  if (label === kw) return true;
+  return label.split(/[-_0-9]/).indexOf(kw) !== -1;
+}
+
 // ===== v2.1.3：RDAP 域名年龄 + ICP 备案 API 异步增强 =====
 // 参考 VirusDetector 开源项目的 rdap-client.js / icp-api.js 设计，按本项目
 // 架构（非 module SW、消息驱动评分）裁剪实现。
@@ -904,11 +931,19 @@ function applyBrandCheck(result, url) {
       (rule.trustedDomains || []).some(hostMatchesDomain);
   });
   // 第二遍：非官方站点上找第一个关键词命中的品牌
+  // v2.3.9：短拉丁词（<5 字符，如远程库 LINE 的 "line"）子串碰撞率过高——
+  // 标题含 online/offline/deadline/cline 的页面都被旧逻辑判为 LINE 冒充。
+  // 短词在未去空格原文上做词边界复核，长短词行为不变
   if (!onOfficialSite) {
     cache.brandConfig.some(function(rule) {
       const matched = (rule.keywords || []).some(function(keyword) {
         const normalizedKeyword = String(keyword).toLowerCase().replace(/\s+/g, '');
-        return title.includes(normalizedKeyword) || brandHint.includes(normalizedKeyword);
+        if (!title.includes(normalizedKeyword) && !brandHint.includes(normalizedKeyword)) return false;
+        if (isShortLatinKeyword(normalizedKeyword)) {
+          return shortKeywordBoundaryHit(normalizedKeyword, result.title) ||
+            shortKeywordBoundaryHit(normalizedKeyword, result.brand);
+        }
+        return true;
       });
       if (matched) { matchedBrand = rule; return true; }
       return false;
@@ -932,22 +967,24 @@ function applyBrandCheck(result, url) {
   // 域名品牌词仿冒——hostname 含品牌英文关键词（≥3 字符纯拉丁词）却不在
   // 官方域，typosquatting 证据（如 huorongaq.com 含 "huorong" 冒充火绒安全）。
   // v2.1.3：增加编辑距离 ≤1 比对，覆盖拼写变体（huorrong.com.cn 双写 r，
-  // 精确子串匹配抓不到）。v2.2.0：命中改为 +30 计分参与综合裁决，不再直拦
+  // 精确子串匹配抓不到）。v2.2.0：命中改为 +30 计分参与综合裁决，不再直拦。
+  // v2.3.9：短词改走强边界（brandDomainKeywordHit），注册段提取提升到循环外
+  const impLabels = hostname.split('.');
+  const impSecond = impLabels.length >= 2 ? impLabels[impLabels.length - 2] : '';
+  const impCnDouble = impLabels[impLabels.length - 1] === 'cn' &&
+    ['com','net','org','gov','edu','ac'].includes(impSecond);
+  const impCut = impCnDouble ? 2 : 1;
+  const impRegistrable = impLabels.length > impCut
+    ? impLabels[impLabels.length - impCut - 1] : impLabels[0] || '';
   const domainImpersonated = (matchedBrand.keywords || []).some(function(keyword) {
     const kw = String(keyword).toLowerCase();
     if (kw.length < 3 || !/^[a-z0-9]+$/.test(kw)) return false;
-    if (hostname.indexOf(kw) !== -1) return true;
-    // 编辑距离路径：取域名主体段（去 TLD，处理 com.cn 双段后缀）比对
-    if (kw.length >= 6) {
-      const labels = hostname.split('.');
-      const tld = labels[labels.length - 1];
-      const second = labels.length >= 2 ? labels[labels.length - 2] : '';
-      const isCnDouble = tld === 'cn' && ['com','net','org','gov','edu','ac'].includes(second);
-      const cut = isCnDouble ? 2 : 1;
-      const registrable = labels.length > cut ? labels[labels.length - cut - 1] : labels[0] || '';
-      if (registrable && Math.abs(registrable.length - kw.length) <= 1 &&
-          levenshteinWithin1(registrable, kw)) return true;
-    }
+    // 路径 1：子串包含（短词需强边界：cline.bot 不再命中 LINE）
+    if (brandDomainKeywordHit(kw, hostname, impRegistrable)) return true;
+    // 路径 2：编辑距离 ≤1 的拼写变体（huorrong ↔ huorong，仅 ≥6 字符长词）
+    if (kw.length >= 6 && impRegistrable &&
+        Math.abs(impRegistrable.length - kw.length) <= 1 &&
+        levenshteinWithin1(impRegistrable, kw)) return true;
     return false;
   });
   if (domainImpersonated) {
@@ -2402,23 +2439,25 @@ function aiLinkBrandImpersonation(hostname) {
   });
   if (onOfficialSite) return null;
   let hitBrand = null;
+  // v2.3.9：注册段提取提升到循环外；短词走强边界（cline.bot 不再命中 LINE）
+  const labels = hostname.split('.');
+  const second = labels.length >= 2 ? labels[labels.length - 2] : '';
+  const isCnDouble = labels[labels.length - 1] === 'cn' &&
+    ['com','net','org','gov','edu','ac'].includes(second);
+  const cut = isCnDouble ? 2 : 1;
+  const registrable = labels.length > cut ? labels[labels.length - cut - 1] : labels[0] || '';
   cache.brandConfig.some(function(rule) {
     return (rule.keywords || []).some(function(keyword) {
       const kw = String(keyword).toLowerCase();
       // 仅纯拉丁数字关键词参与域名比对（中文词不会出现在域名里）
       if (kw.length < 3 || !/^[a-z0-9]+$/.test(kw)) return false;
-      if (hostname.indexOf(kw) !== -1) { hitBrand = rule.name; return true; }
-      // 编辑距离路径：取域名主体段（处理 com.cn 双段后缀）比对
-      if (kw.length >= 6) {
-        const labels = hostname.split('.');
-        const tld = labels[labels.length - 1];
-        const second = labels.length >= 2 ? labels[labels.length - 2] : '';
-        const isCnDouble = tld === 'cn' && ['com','net','org','gov','edu','ac'].includes(second);
-        const cut = isCnDouble ? 2 : 1;
-        const registrable = labels.length > cut ? labels[labels.length - cut - 1] : labels[0] || '';
-        if (registrable && Math.abs(registrable.length - kw.length) <= 1 &&
-            levenshteinWithin1(registrable, kw)) { hitBrand = rule.name; return true; }
+      if (brandDomainKeywordHit(kw, hostname, registrable)) {
+        hitBrand = rule.name; return true;
       }
+      // 编辑距离路径：拼写变体比对（仅 ≥6 字符长词，碰撞率低）
+      if (kw.length >= 6 && registrable &&
+          Math.abs(registrable.length - kw.length) <= 1 &&
+          levenshteinWithin1(registrable, kw)) { hitBrand = rule.name; return true; }
       return false;
     });
   });

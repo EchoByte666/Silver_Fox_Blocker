@@ -1270,6 +1270,30 @@ function levenshteinWithin1(a, b) {
   return rest1 === rest2;                            // 替换一位后相同
 }
 
+// ===== v2.3.9：品牌关键词匹配防子串碰撞（三个工具函数与 background.js 同步）=====
+// 远程品牌库存在短英文词（如 LINE 的 "line"）——"cline.bot"、"online"、
+// "deadline" 都包含子串 "line"，裸 indexOf/includes 会大面积误判仿冒。
+// 短词（<5 字符纯拉丁）只在强边界下采信：
+//   - 域名：注册段整体等于关键词，或按 连字符/下划线/数字 切分后某段
+//     整体等于关键词（line-app.top 命中；cline.bot / linear.app 不命中）
+//   - 文本：词边界匹配，必须基于未去空格原文判定（规范化文本已剥空白）
+function isShortLatinKeyword(kw) {
+  return kw.length < 5 && /^[a-z0-9]+$/.test(kw);
+}
+
+function shortKeywordBoundaryHit(kw, rawText) {
+  return new RegExp('(^|[^a-z0-9])' + kw + '([^a-z0-9]|$)')
+    .test(String(rawText || '').toLowerCase());
+}
+
+function brandDomainKeywordHit(kw, hostname, registrable) {
+  if (String(hostname).indexOf(kw) === -1) return false;
+  if (!isShortLatinKeyword(kw)) return true;
+  var label = String(registrable || '');
+  if (label === kw) return true;
+  return label.split(/[-_0-9]/).indexOf(kw) !== -1;
+}
+
 // ===== localStorage 缓存读取 =====
 // 第一阶段（首屏检测）与第三阶段（缓存同步）共用一次读取，
 // 避免重复解析；读取失败时退回硬编码兜底列表
@@ -1801,14 +1825,25 @@ function readCachedRules() {
     var normalizedTitleBrandText = normalizeBrandText(titleText);
     var normalizedMetaBrandText = normalizeBrandText(metaText);
     var normalizedHeadingBrandText = normalizeBrandText(primaryHeading && primaryHeading.innerText || '');
-    function matchesBrand(rule, haystack) {
+    // v2.3.9：短拉丁词（如远程库 LINE 的 "line"）需在未去空格原文上做词边界
+    // 复核——"cline"、"online"、"deadline" 都包含 "line"，规范化文本已剥空白
+    // 无法判词边界，故保留原文副本传入
+    var rawTitleBrandText = String(titleText || '').toLowerCase();
+    var rawMetaBrandText = String(metaText || '').toLowerCase();
+    var rawHeadingBrandText = String(primaryHeading && primaryHeading.innerText || '').toLowerCase();
+    function matchesBrand(rule, haystack, rawHaystack) {
       return (rule.keywords || []).some(function(keyword) {
         var normalizedKeyword = String(keyword).toLowerCase().replace(/\s+/g, '');
-        return haystack.includes(normalizedKeyword);
+        if (!haystack.includes(normalizedKeyword)) return false;
+        if (isShortLatinKeyword(normalizedKeyword) &&
+            !shortKeywordBoundaryHit(normalizedKeyword, rawHaystack)) return false;
+        return true;
       });
     }
     var combinedBrandText = normalizedTitleBrandText + '|' +
       normalizedHeadingBrandText + '|' + normalizedMetaBrandText;
+    var combinedRawBrandText = rawTitleBrandText + '|' +
+      rawHeadingBrandText + '|' + rawMetaBrandText;
     // v2.1.5：开发者平台与搜索引擎豁免（两表均与 background.js 同名表
     // 两处同步）——平台页面提及品牌是文档/讨论语境，搜索结果页标题
     // 必然包含用户查询的品牌词，均为"提及"而非"冒充"，
@@ -1822,7 +1857,7 @@ function readCachedRules() {
       return host === searchDomain || host.endsWith('.' + searchDomain);
     });
     var matchedBrandRule = (isDeveloperPlatform || isSearchEngine || isAiChatPage) ? null : brandConfig.find(function(rule) {
-      return matchesBrand(rule, combinedBrandText);
+      return matchesBrand(rule, combinedBrandText, combinedRawBrandText);
     });
     // 命中档位：3=页面标题 / 2=h1 主标题 / 1=仅 SEO 元数据
     var brandHitTier = 0;
@@ -1839,8 +1874,8 @@ function readCachedRules() {
       if (trusted) trustedDistributor = rule;
       else if (!official) {
         brandMatch = rule;
-        if (matchesBrand(rule, normalizedTitleBrandText)) brandHitTier = 3;
-        else if (matchesBrand(rule, normalizedHeadingBrandText)) brandHitTier = 2;
+        if (matchesBrand(rule, normalizedTitleBrandText, rawTitleBrandText)) brandHitTier = 3;
+        else if (matchesBrand(rule, normalizedHeadingBrandText, rawHeadingBrandText)) brandHitTier = 2;
         else brandHitTier = 1;
         // v2.2.0：仅 SEO 元数据命中（tier 1）且标题/h1 无声称词 → 不算冒充。
         // meta keywords 堆品牌词的 SEO 站是分层计分后残留的最大误报源——
@@ -1890,8 +1925,9 @@ function readCachedRules() {
       domainBrandImpersonation = (brandMatch.keywords || []).some(function(keyword) {
         var kw = String(keyword).toLowerCase();
         if (kw.length < 3 || !/^[a-z0-9]+$/.test(kw)) return false;
-        // 路径 1：精确子串包含（huorongaq 含 huorong）
-        if (host.indexOf(kw) !== -1) return true;
+        // 路径 1：子串包含（huorongaq 含 huorong）；短词需强边界——
+        // v2.3.9：cline.bot / linear.app 不再因含 "line" 判为 LINE 仿冒
+        if (brandDomainKeywordHit(kw, host, registrable)) return true;
         // 路径 2：编辑距离 ≤1 的拼写变体（huorrong ↔ huorong，仅长词）
         if (kw.length >= 6 && registrable &&
             Math.abs(registrable.length - kw.length) <= 1 &&
@@ -2007,7 +2043,9 @@ function readCachedRules() {
     // 标题/meta 含"官网"等字样，或 author meta 自称品牌方
     var authorMeta = document.querySelector('meta[name="author"]');
     var normalizedAuthor = String(authorMeta && authorMeta.content || '').toLowerCase().replace(/\s+/g, '');
-    var authorBrandClaim = !!brandMatch && matchesBrand(brandMatch, normalizedAuthor);
+    // v2.3.9：短词词边界复核需未去空格原文
+    var rawAuthor = String(authorMeta && authorMeta.content || '').toLowerCase();
+    var authorBrandClaim = !!brandMatch && matchesBrand(brandMatch, normalizedAuthor, rawAuthor);
     var officialClaimMismatch = /官网|官方网站|官方下载|官方客户端下载/.test(titleText + ' ' + metaText) || authorBrandClaim;
     add('officialClaimMismatch', '品牌冒充并声明官方身份', 20,
       !softwareCatalog && !!brandMatch && officialClaimMismatch,

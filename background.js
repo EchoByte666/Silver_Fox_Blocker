@@ -1133,7 +1133,8 @@ function isUgcHostname(hostname) {
 // 核验。前台另有提示卡片与站外链接拦截（content.js 末尾模块）
 const SECURITY_FORUM_DOMAINS = [
   'kafan.cn',       // 卡饭论坛
-  'pediy.com',      // 看雪学院
+  'pediy.com',      // 看雪学院（旧域）
+  'kanxue.com',     // 看雪论坛（bbs.kanxue.com，现用主域）
   '52pojie.cn',     // 吾爱破解论坛
   't00ls.com',      // T00ls 安全小组
   't00ls.net'       // T00ls 备用域

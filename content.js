@@ -206,7 +206,8 @@ function isUgcHostname(hostname) {
 // 注意：background.js 中有相同列表（applyBrandCheck 用），修改时需两处同步
 const SECURITY_FORUM_DOMAINS = [
   'kafan.cn',       // 卡饭论坛（bbs.kafan.cn 等）
-  'pediy.com',      // 看雪学院（bbs.pediy.com 等）
+  'pediy.com',      // 看雪学院（bbs.pediy.com 等，旧域）
+  'kanxue.com',     // 看雪论坛（bbs.kanxue.com，现用主域）
   '52pojie.cn',     // 吾爱破解论坛
   't00ls.com',      // T00ls 安全小组
   't00ls.net'       // T00ls 备用域
@@ -3058,7 +3059,7 @@ function readCachedRules() {
         '  </div>' +
         '  <div class="desc">目标地址：</div>' +
         '  <div class="url"></div>' +
-        '  <div class="desc">站外链接可能指向<b>木马、钓鱼或仿冒页面</b>——投毒团伙常在此类社区借"工具/补丁"外链传播银狐木马。下载文件请优先使用站内附件并核对哈希值。</div>' +
+        '  <div class="desc">站外链接可能指向<b>木马、钓鱼或仿冒页面</b>——帖内分享的样本、工具与外链均由坛友自行发布，安全性无法逐一验证。下载文件请优先使用站内附件并核对哈希值。</div>' +
         '  <div class="ops">' +
         '    <button class="once" type="button">仅本次允许访问</button>' +
         '    <button class="cancel" type="button">取消</button>' +

@@ -2891,7 +2891,11 @@ function readCachedRules() {
     function injectSecForumNotice() {
       if (secForumBannerHost || !document.documentElement) return;
       var host = document.createElement('div');
-      host.style.cssText = 'all:initial;';
+      // 注意：宿主上的内联 all:initial 会把 position 重置为 static 并覆盖 shadow
+      // 内的 :host{position:fixed}（内联样式优先级更高），因此定位必须在内联里重申，
+      // 否则卡片会掉到文档流末尾、被页面内容压在底下（v2.5.2 之前的错位即此因）
+      host.style.cssText = 'all:initial;position:fixed;top:0;left:0;right:0;' +
+        'z-index:2147483646;display:flex;justify-content:center;pointer-events:none;';
       try { var sh = host.attachShadow({ mode: 'closed' }); } catch(e) { return; }
       sh.innerHTML =
         '<style>' +

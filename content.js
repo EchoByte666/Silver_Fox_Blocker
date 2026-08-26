@@ -2881,40 +2881,111 @@ function readCachedRules() {
       secForumBannerHost = null;
     }
 
+    function ackSecForumNotice() {
+      try { window.sessionStorage.setItem('yhSecForumAck', SEC_FORUM_REG); } catch(e) { /* */ }
+      removeSecForumBanner();
+    }
+
     // ---- 顶部提示卡片（closed Shadow DOM，与验证卡片/横幅同一实现约定）----
     function injectSecForumNotice() {
       if (secForumBannerHost || !document.documentElement) return;
       var host = document.createElement('div');
-      host.style.cssText = 'all:initial;position:fixed;top:0;left:0;right:0;z-index:2147483646;pointer-events:none;';
+      host.style.cssText = 'all:initial;';
       try { var sh = host.attachShadow({ mode: 'closed' }); } catch(e) { return; }
       sh.innerHTML =
         '<style>' +
-        '.sf-card{pointer-events:auto;margin:10px auto;max-width:720px;width:calc(100% - 24px);' +
-        'background:#1f2732;color:#e8eaed;border-radius:12px;padding:14px 18px;' +
-        'box-shadow:0 6px 24px rgba(0,0,0,.35);font:13px/1.7 system-ui,sans-serif;border:1px solid #3c4a5d}' +
-        '.sf-head{display:flex;align-items:center;gap:8px;font-size:15px;font-weight:700;color:#ffd54f}' +
-        '.sf-txt{margin-top:8px;color:#cfd8e3}' +
-        '.sf-txt b{color:#fff}' +
-        '.sf-txt .warn{color:#ff8a80;font-weight:700}' +
-        '.sf-ops{margin-top:12px;display:flex;gap:10px;flex-wrap:wrap}' +
-        'button{cursor:pointer;border:none;border-radius:8px;padding:8px 16px;font-size:13px;font-weight:600}' +
-        '.ok{background:#3ddc84;color:#10231a}.wl{background:#8ab4f8;color:#0b2544}' +
-        '.hint{margin-top:8px;font-size:12px;color:#9aa7b6}' +
+        ':host { position: fixed; top: 0; left: 0; right: 0; z-index: 2147483646;' +
+        '  display: flex; justify-content: center; pointer-events: none;' +
+        '  font-family: system-ui, "Microsoft YaHei", sans-serif; }' +
+        '.card { pointer-events: auto; margin-top: 10px; max-width: 680px; width: calc(100% - 24px);' +
+        '  box-sizing: border-box; background: rgba(255,255,255,0.97);' +
+        '  border: 1px solid #e2e8f0; border-radius: 14px; padding: 14px 16px 12px;' +
+        '  box-shadow: 0 12px 40px rgba(2,6,23,0.18), 0 2px 8px rgba(2,6,23,0.06);' +
+        '  animation: rise .3s ease both; }' +
+        '@keyframes rise { from { opacity: 0; transform: translateY(12px); }' +
+        '  to { opacity: 1; transform: none; } }' +
+        '.head { display: flex; align-items: center; gap: 8px; }' +
+        '.head svg { flex-shrink: 0; color: #d97706; }' +
+        '.title { font-size: 13.5px; font-weight: 700; color: #1e293b; flex: 1; }' +
+        '.close { border: none; background: none; cursor: pointer; padding: 2px; display: flex;' +
+        '  color: #94a3b8; border-radius: 6px; }' +
+        '.close:hover { color: #475569; background: #f1f5f9; }' +
+        '.rule { display: inline-block; margin-top: 8px; font-size: 11px; font-weight: 700;' +
+        '  color: #b45309; background: #fef3c7; padding: 2.5px 9px; border-radius: 20px; }' +
+        '.desc { font-size: 12px; color: #64748b; line-height: 1.65; margin: 8px 0 10px; }' +
+        '.desc b { color: #b91c1c; font-weight: 700; }' +
+        '.ops { display: flex; flex-direction: column; gap: 6px; }' +
+        '.main-btn { display: flex; align-items: center; justify-content: center; gap: 7px;' +
+        '  width: 100%; box-sizing: border-box; cursor: pointer; font-size: 12.5px; font-weight: 600;' +
+        '  color: #1d4ed8; background: #f8faff; border: 1px solid #dbeafe; border-radius: 8px;' +
+        '  padding: 7px 10px; transition: background .15s, border-color .15s; }' +
+        '.main-btn:hover { background: #dbeafe; border-color: #93c5fd; }' +
+        '.wl-btn { display: flex; align-items: center; justify-content: center; gap: 7px;' +
+        '  width: 100%; box-sizing: border-box; cursor: pointer; font-size: 12px; font-weight: 600;' +
+        '  color: #64748b; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px;' +
+        '  padding: 7px 10px; transition: background .15s, color .15s, border-color .15s; }' +
+        '.wl-btn:hover { background: #f1f5f9; color: #475569; }' +
+        '.wl-btn.arm { color: #b45309; background: #fef3c7; border-color: #fcd34d; font-weight: 700; }' +
+        '.wl-btn.done { color: #059669; background: #ecfdf5; border-color: #a7f3d0; }' +
+        '.wl-btn.fail { color: #b91c1c; background: #fef2f2; border-color: #fecaca; }' +
+        '.wl-btn:disabled { cursor: default; opacity: .85; }' +
         '</style>' +
-        '<div class="sf-card" role="alertdialog" aria-label="安全论坛提示">' +
-        '<div class="sf-head"><svg width="18" height="18" viewBox="0 0 24 24" fill="#ffd54f"><path d="M12 2L4 5v6c0 5.25 3.4 10.15 8 11 4.6-.85 8-5.75 8-11V5l-8-3z"/></svg>' +
-        '这里是安全技术研究论坛（' + SEC_FORUM_REG + '）</div>' +
-        '<div class="sf-txt">论坛帖子中的附件、工具、"破解软件"、样本可能包含<b>真实木马与恶意程序</b>' +
+        '<div class="card" role="alertdialog" aria-label="安全论坛提示">' +
+        '  <div class="head">' +
+        '    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-3.6 8-10V5l-8-3-8 3v7c0 6.4 8 10 8 10z"/><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>' +
+        '    <span class="title">这里是安全技术研究论坛</span>' +
+        '    <button class="close" title="本次会话不再提示" aria-label="关闭提示">' +
+        '      <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg>' +
+        '    </button>' +
+        '  </div>' +
+        '  <span class="rule">安全研究社区：' + SEC_FORUM_REG + '</span>' +
+        '  <div class="desc">论坛帖子中的附件、工具、"破解软件"、样本可能包含<b>真实木马与恶意程序</b>' +
         '（包括银狐木马——常借"远控工具/破解补丁/游戏外挂"名义传播），仅供安全研究人员在隔离环境中分析。' +
-        '<span class="warn">请勿下载运行任何附件，不要随意点击站外链接</span>——除非你确切知道自己在做什么。</div>' +
-        '<div class="sf-ops"><button class="ok">我知道了</button><button class="wl">一键加白此论坛（不再提示与拦截）</button></div>' +
-        '<div class="hint">点击站外链接时本扩展会再次向你确认；加白后此提示与本保护同时关闭。</div>' +
+        '请勿下载运行任何附件，不要随意点击站外链接——除非你确切知道自己在做什么。</div>' +
+        '  <div class="ops">' +
+        '    <button class="main-btn" type="button">' +
+        '      <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>' +
+        '      我知道了（本次会话不再提示）</button>' +
+        '    <button class="wl-btn" type="button">' +
+        '      <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>' +
+        '      永久信任此论坛（同时关闭站外链接拦截）</button>' +
+        '  </div>' +
         '</div>';
-      sh.querySelector('.ok').addEventListener('click', removeSecForumBanner);
-      sh.querySelector('.wl').addEventListener('click', function() {
-        this.disabled = true; this.textContent = '添加中…';
+      var wlBtn = sh.querySelector('.wl-btn');
+      var WL_DEFAULT_TEXT = '永久信任此论坛（同时关闭站外链接拦截）';
+      sh.querySelector('.close').addEventListener('click', ackSecForumNotice);
+      sh.querySelector('.main-btn').addEventListener('click', ackSecForumNotice);
+      // 两段式确认：与验证卡片加白按钮同一交互——首击进入琥珀警示态，
+      // 5 秒内再点才执行写白名单，防小白误触把保护永久关掉
+      wlBtn.addEventListener('click', function() {
+        if (!wlBtn.dataset.armed) {
+          wlBtn.dataset.armed = '1';
+          wlBtn.classList.add('arm');
+          wlBtn.textContent = '再次点击确认永久信任';
+          setTimeout(function() {
+            if (wlBtn.dataset.armed && !wlBtn.disabled) {
+              delete wlBtn.dataset.armed;
+              wlBtn.classList.remove('arm');
+              wlBtn.textContent = WL_DEFAULT_TEXT;
+            }
+          }, 5000);
+          return;
+        }
+        wlBtn.disabled = true;
+        wlBtn.textContent = '添加中…';
         secForumAddWhitelist(function(ok) {
-          if (!ok && sh.querySelector('.wl')) sh.querySelector('.wl').textContent = '添加失败，请重试';
+          if (ok) {
+            wlBtn.textContent = '已加入白名单';
+            wlBtn.classList.remove('arm');
+            wlBtn.classList.add('done');
+            setTimeout(removeSecForumBanner, 1500);
+          } else {
+            delete wlBtn.dataset.armed;
+            wlBtn.classList.remove('arm');
+            wlBtn.classList.add('fail');
+            wlBtn.textContent = '加入白名单失败，请重试';
+            wlBtn.disabled = false;
+          }
         });
       });
       document.documentElement.appendChild(host);
@@ -2944,32 +3015,92 @@ function readCachedRules() {
       host.style.cssText = 'all:initial;position:fixed;inset:0;z-index:2147483647;';
       try { var sh = host.attachShadow({ mode: 'closed' }); } catch(e) { return; }
       sh.innerHTML =
-        '<style>.ov{position:absolute;inset:0;background:rgba(0,0,0,.55);display:flex;' +
-        'align-items:center;justify-content:center;font:13px/1.7 system-ui,sans-serif;padding:16px}' +
-        '.box{background:#1f2732;color:#e8eaed;max-width:520px;width:100%;border-radius:12px;' +
-        'padding:20px 22px;box-shadow:0 10px 40px rgba(0,0,0,.5);border:1px solid #3c4a5d}' +
-        'h3{margin:0 0 10px;font-size:15px;color:#ff8a80;display:flex;align-items:center;gap:8px}' +
-        '.url{word-break:break-all;background:#12181f;border-radius:8px;padding:8px 10px;color:#8ab4f8;margin:8px 0;font-size:12px}' +
-        '.ops{display:flex;gap:10px;margin-top:14px;flex-wrap:wrap}' +
-        'button{cursor:pointer;border:none;border-radius:8px;padding:9px 16px;font-size:13px;font-weight:600}' +
-        '.cancel{background:#3c4a5d;color:#e8eaed}.once{background:#fbbc04;color:#3c2e00}' +
-        '.forever{background:#8ab4f8;color:#0b2544}</style>' +
+        '<style>' +
+        ':host { position: fixed; inset: 0; z-index: 2147483647;' +
+        '  font-family: system-ui, "Microsoft YaHei", sans-serif; }' +
+        '.ov { position: absolute; inset: 0; background: rgba(15,23,42,.45);' +
+        '  display: flex; align-items: center; justify-content: center; padding: 16px; }' +
+        '.box { background: rgba(255,255,255,0.98); max-width: 480px; width: 100%;' +
+        '  box-sizing: border-box; border-radius: 14px; padding: 18px 20px 14px;' +
+        '  border: 1px solid #e2e8f0; box-shadow: 0 12px 40px rgba(2,6,23,0.25);' +
+        '  animation: rise .25s ease both; }' +
+        '@keyframes rise { from { opacity: 0; transform: translateY(12px) }' +
+        '  to { opacity: 1; transform: none } }' +
+        '.head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }' +
+        '.head svg { flex-shrink: 0; color: #dc2626; }' +
+        '.title { font-size: 13.5px; font-weight: 700; color: #1e293b; flex: 1; }' +
+        '.url { word-break: break-all; background: #f8fafc; border: 1px solid #e2e8f0;' +
+        '  border-radius: 8px; padding: 7px 10px; color: #1d4ed8; margin: 8px 0; font-size: 12px; }' +
+        '.desc { font-size: 12px; color: #64748b; line-height: 1.65; }' +
+        '.desc b { color: #b91c1c; font-weight: 700; }' +
+        '.ops { display: flex; flex-direction: column; gap: 6px; margin-top: 12px; }' +
+        '.once { display: flex; align-items: center; justify-content: center; gap: 7px;' +
+        '  width: 100%; box-sizing: border-box; cursor: pointer; font-size: 12.5px; font-weight: 600;' +
+        '  color: #1d4ed8; background: #f8faff; border: 1px solid #dbeafe; border-radius: 8px;' +
+        '  padding: 7px 10px; transition: background .15s, border-color .15s; }' +
+        '.once:hover { background: #dbeafe; border-color: #93c5fd; }' +
+        '.cancel, .forever { display: flex; align-items: center; justify-content: center; gap: 7px;' +
+        '  width: 100%; box-sizing: border-box; cursor: pointer; font-size: 12px; font-weight: 600;' +
+        '  border-radius: 8px; padding: 7px 10px;' +
+        '  transition: background .15s, color .15s, border-color .15s; }' +
+        '.cancel { color: #64748b; background: #f8fafc; border: 1px solid #e2e8f0; }' +
+        '.cancel:hover { background: #f1f5f9; color: #475569; }' +
+        '.forever { color: #64748b; background: #f8fafc; border: 1px solid #e2e8f0; }' +
+        '.forever:hover { background: #f1f5f9; color: #475569; }' +
+        '.forever.arm { color: #b45309; background: #fef3c7; border-color: #fcd34d; font-weight: 700; }' +
+        '.forever.done { color: #059669; background: #ecfdf5; border-color: #a7f3d0; }' +
+        '.forever.fail { color: #b91c1c; background: #fef2f2; border-color: #fecaca; }' +
+        '</style>' +
         '<div class="ov"><div class="box" role="dialog" aria-modal="true">' +
-        '<h3><svg width="16" height="16" viewBox="0 0 24 24" fill="#ff8a80"><path d="M12 2L4 5v6c0 5.25 3.4 10.15 8 11 4.6-.85 8-5.75 8-11V5l-8-3z"/></svg>' +
-        '你正在从安全论坛离开，前往外部网站</h3>' +
-        '<div>目标：</div><div class="url"></div>' +
-        '<div>安全论坛的站外链接可能指向<b style="color:#ff8a80">木马、钓鱼或仿冒页面</b>；' +
-        '投毒团伙常在此类社区借"工具/补丁"外链传播银狐木马。下载文件请优先使用站内附件并核对哈希值。</div>' +
-        '<div class="ops"><button class="cancel">取消</button>' +
-        '<button class="once">仅本次允许访问</button>' +
-        '<button class="forever">永久加白论坛（关闭本保护）</button></div>' +
+        '  <div class="head">' +
+        '    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-3.6 8-10V5l-8-3-8 3v7c0 6.4 8 10 8 10z"/><path d="M12 8v4"/><path d="M12 16h.01"/></svg>' +
+        '    <span class="title">你正在从安全论坛离开，前往外部网站</span>' +
+        '  </div>' +
+        '  <div class="desc">目标地址：</div>' +
+        '  <div class="url"></div>' +
+        '  <div class="desc">站外链接可能指向<b>木马、钓鱼或仿冒页面</b>——投毒团伙常在此类社区借"工具/补丁"外链传播银狐木马。下载文件请优先使用站内附件并核对哈希值。</div>' +
+        '  <div class="ops">' +
+        '    <button class="once" type="button">仅本次允许访问</button>' +
+        '    <button class="cancel" type="button">取消</button>' +
+        '    <button class="forever" type="button">永久信任此论坛（关闭链接拦截）</button>' +
+        '  </div>' +
         '</div></div>';
       sh.querySelector('.url').textContent = url + (targetHost ? '　（域名：' + targetHost + '）' : '');
       sh.querySelector('.cancel').addEventListener('click', function() { closeSecForumModal(null); });
       sh.querySelector('.once').addEventListener('click', function() { closeSecForumModal(url, newTab); });
-      sh.querySelector('.forever').addEventListener('click', function() {
-        this.disabled = true; this.textContent = '添加中…';
-        secForumAddWhitelist(function() { closeSecForumModal(null); });
+      // 两段式确认：与验证卡片/提示卡片的加白按钮同一交互
+      var fBtn = sh.querySelector('.forever');
+      var F_DEFAULT_TEXT = '永久信任此论坛（关闭链接拦截）';
+      fBtn.addEventListener('click', function() {
+        if (!fBtn.dataset.armed) {
+          fBtn.dataset.armed = '1';
+          fBtn.classList.add('arm');
+          fBtn.textContent = '再次点击确认永久信任';
+          setTimeout(function() {
+            if (fBtn.dataset.armed && !fBtn.disabled) {
+              delete fBtn.dataset.armed;
+              fBtn.classList.remove('arm');
+              fBtn.textContent = F_DEFAULT_TEXT;
+            }
+          }, 5000);
+          return;
+        }
+        fBtn.disabled = true;
+        fBtn.textContent = '添加中…';
+        secForumAddWhitelist(function(ok) {
+          if (ok) {
+            fBtn.textContent = '已加入白名单';
+            fBtn.classList.remove('arm');
+            fBtn.classList.add('done');
+            setTimeout(function() { closeSecForumModal(null); }, 1200);
+          } else {
+            delete fBtn.dataset.armed;
+            fBtn.classList.remove('arm');
+            fBtn.classList.add('fail');
+            fBtn.textContent = '加入白名单失败，请重试';
+            fBtn.disabled = false;
+          }
+        });
       });
       document.documentElement.appendChild(host);
       secModalHost = host;
@@ -3017,14 +3148,19 @@ function readCachedRules() {
             location.hostname === entry ||
             location.hostname.endsWith('.' + entry));
         });
-        if (!secForumWhitelisted) {
+        // 「我知道了」的会话确认：本标签页会话内不再弹卡（sessionStorage
+        // 随标签页关闭自动清除，下次会话恢复提示）
+        var sessionAcked = false;
+        try { sessionAcked = window.sessionStorage.getItem('yhSecForumAck') === SEC_FORUM_REG; } catch(e) { /* */ }
+        if (!secForumWhitelisted && !sessionAcked) {
           if (document.readyState === 'loading') {
             document.addEventListener('DOMContentLoaded', injectSecForumNotice, { once: true });
           } else {
             injectSecForumNotice();
           }
         }
-        debug('content.js 安全论坛防护就绪 whitelisted=' + secForumWhitelisted);
+        debug('content.js 安全论坛防护就绪 whitelisted=' + secForumWhitelisted +
+          ' sessionAcked=' + sessionAcked);
       });
     } catch(e) { /* 扩展上下文失效 */ }
   }

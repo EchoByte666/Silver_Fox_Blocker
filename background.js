@@ -2273,6 +2273,58 @@ const AI_LINK_CACHE_TTL_MS = 30 * 60 * 1000;  // 结论缓存 30 分钟
 const AI_LINK_CACHE_MAX = 300;
 const AI_LINK_PROBE_TIMEOUT_MS = 8000;
 const AI_LINK_BATCH_MAX = 20;
+// v2.3.6：缓存持久化到 chrome.storage.session——此前 Map 只活在 SW 内存，
+// MV3 的 Service Worker 空闲 ~30 秒即被回收，页面一刷新缓存就空了，
+// 每次都要重新探测/查备案。storage.session 在整个浏览器会话内存续
+//（SW 重启不丢、不落磁盘、关闭浏览器即清除，隐私上适合存核查记录），
+// 写入做 1 秒防抖合并；读取在首次核查前异步灌回内存 Map
+const AI_LINK_CACHE_STORAGE_KEY = 'aiLinkVerdictCache';
+let _verdictStoreLoaded = false;
+let _verdictStoreLoadPromise = null;
+let _verdictFlushTimer = null;
+
+function ensureVerdictStoreLoaded() {
+  if (_verdictStoreLoaded) return Promise.resolve();
+  if (_verdictStoreLoadPromise) return _verdictStoreLoadPromise;
+  _verdictStoreLoadPromise = new Promise(function(resolve) {
+    try {
+      chrome.storage.session.get(AI_LINK_CACHE_STORAGE_KEY, function(data) {
+        try {
+          const arr = data && data[AI_LINK_CACHE_STORAGE_KEY];
+          if (Array.isArray(arr)) {
+            for (const pair of arr) {
+              if (pair && typeof pair.url === 'string' && pair.verdict && pair.ts &&
+                  Date.now() - pair.ts <= AI_LINK_CACHE_TTL_MS) {
+                _aiLinkVerdictCache.set(pair.url, { verdict: pair.verdict, ts: pair.ts });
+              }
+            }
+          }
+        } catch(e) { /* 损坏数据弃用即可 */ }
+        _verdictStoreLoaded = true;
+        resolve();
+      });
+    } catch(e) {
+      // storage.session 不可用（旧浏览器）：静默退回纯内存模式
+      _verdictStoreLoaded = true;
+      resolve();
+    }
+  });
+  return _verdictStoreLoadPromise;
+}
+
+function flushVerdictStore() {
+  if (_verdictFlushTimer) return;
+  _verdictFlushTimer = setTimeout(function() {
+    _verdictFlushTimer = null;
+    try {
+      const arr = [];
+      for (const [u, hit] of _aiLinkVerdictCache) arr.push({ url: u, verdict: hit.verdict, ts: hit.ts });
+      const obj = {};
+      obj[AI_LINK_CACHE_STORAGE_KEY] = arr;
+      chrome.storage.session.set(obj, function() { void chrome.runtime.lastError; });
+    } catch(e) { /* */ }
+  }, 1000);
+}
 
 function getCachedAiLinkVerdict(url) {
   const hit = _aiLinkVerdictCache.get(url);
@@ -2286,6 +2338,7 @@ function cacheAiLinkVerdict(url, verdict) {
   if (_aiLinkVerdictCache.size > AI_LINK_CACHE_MAX) {
     _aiLinkVerdictCache.delete(_aiLinkVerdictCache.keys().next().value);
   }
+  flushVerdictStore();
   return verdict;
 }
 
@@ -2366,8 +2419,50 @@ function aiLinkBrandImpersonation(hostname) {
   return hitBrand;
 }
 
-// 沙箱防追踪探测：跟随重定向取最终落点，不读响应体，8 秒超时
+// 沙箱防追踪探测：跟随重定向取最终落点，不读响应体，8 秒超时。
+// v2.3.6：域名级去重——AI 常给同站多路径链接（xxx.com/dl、xxx.com/about），
+// 按完整 URL 探测会对同一主机重复发请求。探测结论按注册域缓存/去重：
+// 同域第二跳直接复用首跳结果（重定向落点核对同样以注册域为粒度，
+// 同域不同路径的重定向行为差异对风险判定无意义）。并发请求共享同一
+// in-flight Promise；结果随 verdict 缓存同为 30 分钟 TTL
+const _aiLinkProbeCache = new Map();     // registrable → { probe, ts }
+const _aiLinkProbeInFlight = new Map();  // registrable → Promise<probe>
+
 async function sandboxProbeUrl(url) {
+  let registrable = '';
+  try {
+    const u = new URL(url);
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') {
+      return { ok: false, error: '非网页协议' };
+    }
+    registrable = getRegistrableDomain(u.hostname.toLowerCase()) ||
+      u.hostname.toLowerCase();
+  } catch(e) { return { ok: false, error: '无法解析的地址' }; }
+
+  const hit = _aiLinkProbeCache.get(registrable);
+  if (hit) {
+    if (Date.now() - hit.ts <= AI_LINK_CACHE_TTL_MS) return hit.probe;
+    _aiLinkProbeCache.delete(registrable);
+  }
+  const inFlight = _aiLinkProbeInFlight.get(registrable);
+  if (inFlight) return inFlight;
+
+  const p = doSandboxProbe(url).then(function(probe) {
+    _aiLinkProbeCache.set(registrable, { probe: probe, ts: Date.now() });
+    if (_aiLinkProbeCache.size > AI_LINK_CACHE_MAX) {
+      _aiLinkProbeCache.delete(_aiLinkProbeCache.keys().next().value);
+    }
+    _aiLinkProbeInFlight.delete(registrable);
+    return probe;
+  }).catch(function() {
+    _aiLinkProbeInFlight.delete(registrable);
+    return { ok: false, error: '网络错误' };
+  });
+  _aiLinkProbeInFlight.set(registrable, p);
+  return p;
+}
+
+async function doSandboxProbe(url) {
   const controller = new AbortController();
   const timer = setTimeout(function() { controller.abort(); }, AI_LINK_PROBE_TIMEOUT_MS);
   try {
@@ -2493,6 +2588,8 @@ async function classifyAiChatLink(url) {
 }
 
 async function handleAiChatLinkScan(urls, tabId) {
+  // v2.3.6：先灌回持久化缓存（SW 重启后首次核查时），命中则零网络开销
+  await ensureVerdictStoreLoaded();
   const list = (Array.isArray(urls) ? urls : []).slice(0, AI_LINK_BATCH_MAX);
   const results = {};
   for (const url of list) {

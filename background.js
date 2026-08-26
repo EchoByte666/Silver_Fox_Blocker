@@ -2252,10 +2252,13 @@ try {
 // ===== v2.3.0：AI 对话页外链核查（沙箱防追踪探测）=====
 // 对话中由 AI 给出的链接可能是幻觉域名/钓鱼站/被入侵站。分级策略：
 //   danger  已知恶意（内置投毒库/黑名单命中；或探测后发现重定向落地恶意域）
-//   warn    可疑（连字符模式域名，探测后维持并附探测结论）
+//   warn    可疑（多信号可疑形态，探测后附探测结论）
 //   safe    官方/白名单/政府域
-//   unknown 无已知风险且未探测——不对每条外链发请求，避免无谓网络行为
-// 探测仅在"域名形态可疑"时触发，且全程防追踪：
+//   unknown 无已知风险且未探测——不对干净外链发请求，避免无谓网络行为
+// v2.3.2：探测触发从单一"连字符模式"扩展为多信号（见
+// aiLinkSuspicionReasons）：高滥用 TLD / http 明文 / IP 直连 / punycode /
+// 非 ASCII 域名 / 注册标签含连字符 / 深子域 / 超长主机名，命中任一即探测。
+// 探测全程防追踪：
 //   credentials:'omit'          不携带任何 Cookie/凭证
 //   referrerPolicy:'no-referrer' 不泄露来源页（对话内容不出本机）
 //   cache:'no-store'            不读写 HTTP 缓存
@@ -2284,6 +2287,36 @@ function cacheAiLinkVerdict(url, verdict) {
 function isHardcodedHost(hostname) {
   return HARDCODED_DOMAINS.indexOf(hostname) !== -1 ||
     HARDCODED_DOMAINS.some(function(d) { return hostname.endsWith('.' + d); });
+}
+
+// v2.3.2：可疑形态多信号判定——此前仅"连字符 com.cn/hl.cn/cc 模式"触发
+// 沙箱探测，实测普通钓鱼域（.top/.xyz 新注册、http 明文、IP 直连、深子域等）
+// 全部落灰不查，用户误以为核查通道没生效。扩展为命中任一信号即探测；
+// 探测本身防追踪（无 Cookie/无 Referer/不读响应体）且结论缓存 30 分钟，
+// 成本可控。返回触发原因数组（空数组 = 不可疑）
+const AI_LINK_RISKY_TLDS = [
+  'top', 'xyz', 'cc', 'icu', 'cyou', 'buzz', 'monster', 'rest', 'fit', 'live'
+];
+function aiLinkSuspicionReasons(hostname) {
+  const reasons = [];
+  if (matchesPatternDomain(hostname)) reasons.push('可疑连字符域名模式');
+  const parts = hostname.split('.');
+  const tld = parts.length >= 2 ? parts[parts.length - 1] : '';
+  if (AI_LINK_RISKY_TLDS.indexOf(tld) !== -1) {
+    reasons.push('高滥用 TLD（.' + tld + '）');
+  }
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(hostname)) reasons.push('IP 地址直连');
+  if (hostname.indexOf('xn--') !== -1) reasons.push('国际化域名编码（punycode）');
+  // 非 ASCII 主机名（同源 Unicode 形态的国际化域名）
+  if (/[^\x00-\x7F]/.test(hostname)) reasons.push('含非 ASCII 字符域名');
+  // 注册标签含连字符（如 foo-bar.net；pattern 模式已覆盖的不重复记）
+  const reg = parts.length >= 2 ? parts[parts.length - 2] : '';
+  if (reg && reg.indexOf('-') !== -1 && reasons.indexOf('可疑连字符域名模式') === -1) {
+    reasons.push('注册标签含连字符');
+  }
+  if (parts.length >= 4) reasons.push('深层子域（≥4 级）');
+  if (hostname.length > 30) reasons.push('超长主机名');
+  return reasons;
 }
 
 // 沙箱防追踪探测：跟随重定向取最终落点，不读响应体，8 秒超时
@@ -2337,26 +2370,29 @@ async function classifyAiChatLink(url) {
     return cacheAiLinkVerdict(url, { level: 'danger', host: hostname, probed: false,
       reason: '恶意域名黑名单命中' });
   }
-  // 非可疑形态：不定级不发请求（unknown 仅色点提示）
-  const pattern = matchesPatternDomain(hostname);
-  if (!pattern) {
+  // v2.3.2：多信号可疑判定 + http 明文链接；均未命中才落灰不查
+  const susReasons = aiLinkSuspicionReasons(hostname);
+  if (parsed.protocol === 'http:') susReasons.push('HTTP 明文链接');
+  if (!susReasons.length) {
     return cacheAiLinkVerdict(url, { level: 'unknown', host: hostname, probed: false,
       reason: '未发现已知风险（未发起访问）' });
   }
-  // 可疑连字符模式域名：沙箱防追踪探测，重点核对重定向落地点
+  const susTag = susReasons[0] +
+    (susReasons.length > 1 ? ' 等 ' + susReasons.length + ' 项可疑特征' : '');
+  // 可疑形态：沙箱防追踪探测，重点核对重定向落地点
   const probe = await sandboxProbeUrl(url);
   if (!probe.ok) {
     return cacheAiLinkVerdict(url, { level: 'warn', host: hostname, probed: true,
-      reason: '可疑连字符域名模式；沙箱探测失败（' + probe.error + '），请谨慎访问' });
+      reason: susTag + '；沙箱探测失败（' + probe.error + '），请谨慎访问' });
   }
   let finalHost = '';
   try { finalHost = new URL(probe.finalUrl).hostname.toLowerCase(); } catch(e) { /* */ }
   if (finalHost && (isHardcodedHost(finalHost) || setMatches(blocklistSet, finalHost))) {
     return cacheAiLinkVerdict(url, { level: 'danger', host: hostname, probed: true,
-      reason: '重定向至恶意域名：' + finalHost });
+      reason: susTag + '，且重定向至恶意域名：' + finalHost });
   }
   return cacheAiLinkVerdict(url, { level: 'warn', host: hostname, probed: true,
-    reason: '可疑连字符域名模式（HTTP ' + probe.status +
+    reason: susTag + '（HTTP ' + probe.status +
       (finalHost && finalHost !== hostname ? '，重定向至 ' + finalHost : '，可直接访问') + '）' });
 }
 

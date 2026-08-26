@@ -2542,7 +2542,9 @@ function readCachedRules() {
   //   pending 蓝点脉冲+"检测中" / danger 红点+"危险" / warn 橙点+"可疑" /
   //   safe 绿点 / unknown 灰点（后两者仅色点，不占空间语义）
   // 悬停或点击徽标均弹出核查详情面板（结论/目标域/探测方式）；
-  // 点击已 stopPropagation，不会触发链接跳转或页面自身点击逻辑
+  // 点击已 stopPropagation，不会触发链接跳转或页面自身点击逻辑。
+  // v2.3.2：面板宿主挂在 documentElement 下（transform 祖先会把 fixed
+  // 定位基准改成容器，导致面板错位到页面角落——详见 injectLinkBadge 内注释）
   var activeBadgePanels = [];   // 打开中的面板 close 函数（滚动时统一收起）
   var badgeScrollHooked = false;
   function hookBadgeScroll() {
@@ -2558,6 +2560,10 @@ function readCachedRules() {
     try {
       if (anchorEl.__sfLinkBadge && anchorEl.__sfLinkBadge.parentNode) {
         anchorEl.__sfLinkBadge.parentNode.removeChild(anchorEl.__sfLinkBadge);
+      }
+      // 同步清理旧详情面板宿主（面板挂在 documentElement 下，见下）
+      if (anchorEl.__sfLinkPanel && anchorEl.__sfLinkPanel.parentNode) {
+        anchorEl.__sfLinkPanel.parentNode.removeChild(anchorEl.__sfLinkPanel);
       }
       var META = {
         danger:  { color: '#d93025', label: '危险',   cls: 'b danger' },
@@ -2595,15 +2601,7 @@ function readCachedRules() {
         '.d{width:7px;height:7px;border-radius:50%;flex:none}' +
         '.b.plain .d{width:10px;height:10px}' +
         '@keyframes sfPulse{0%{opacity:.3}50%{opacity:1}100%{opacity:.3}}' +
-        '.b.pending .d{animation:sfPulse 1s ease-in-out infinite}' +
-        '.panel{position:fixed;z-index:2147483647;display:none;max-width:280px;' +
-        'padding:10px 12px;border-radius:8px;background:#fff;color:#202124;' +
-        'font:400 12px/1.7 system-ui,-apple-system,"Segoe UI",sans-serif;' +
-        'box-shadow:0 4px 16px rgba(0,0,0,.2);border:1px solid #dadce0}' +
-        '.panel.open{display:block}' +
-        '.panel .t{font-weight:600;margin-bottom:4px}' +
-        '.panel .row{display:flex;gap:6px;margin-top:2px}' +
-        '.panel .k{color:#5f6368;flex:none}';
+        '.b.pending .d{animation:sfPulse 1s ease-in-out infinite}';
       shadow.appendChild(style);
 
       var badge = document.createElement('span');
@@ -2621,7 +2619,25 @@ function readCachedRules() {
       }
       shadow.appendChild(badge);
 
-      // 详情面板：悬停 / 点击均可呼出；fixed 定位防容器 overflow 裁剪
+      // 详情面板：悬停 / 点击均可呼出。面板不放在徽标的 shadow 里，而是
+      // 挂在 document.documentElement 直下的独立宿主——AI 对话页消息容器
+      // 普遍带 transform 动画，CSS 规范下 transform 祖先会把 position:fixed
+      // 的定位基准从视口改成该容器（此前面板"跑页面右上角"的根因）。
+      // 文档根节点无 transform 祖先，fixed 恒以视口定位
+      var panelHost = document.createElement('span');
+      panelHost.className = 'sf-link-panel-host';
+      var pshadow = panelHost.attachShadow({ mode: 'closed' });
+      var pstyle = document.createElement('style');
+      pstyle.textContent =
+        ':host{all:initial;position:fixed;left:0;top:0;z-index:2147483647;display:none}' +
+        '.panel{max-width:300px;padding:10px 12px;border-radius:8px;background:#fff;' +
+        'color:#202124;font:400 12px/1.7 system-ui,-apple-system,"Segoe UI",sans-serif;' +
+        'box-shadow:0 4px 16px rgba(0,0,0,.2);border:1px solid #dadce0}' +
+        '.panel .t{font-weight:600;margin-bottom:4px}' +
+        '.panel .row{display:flex;gap:6px;margin-top:2px}' +
+        '.panel .k{color:#5f6368;flex:none}';
+      pshadow.appendChild(pstyle);
+
       var panel = document.createElement('div');
       panel.className = 'panel';
       var title = document.createElement('div');
@@ -2638,17 +2654,28 @@ function readCachedRules() {
         var v = document.createElement('span'); v.textContent = pair[1];
         row.appendChild(k); row.appendChild(v); panel.appendChild(row);
       });
-      shadow.appendChild(panel);
+      pshadow.appendChild(panel);
+      try { (document.documentElement || document.body).appendChild(panelHost); } catch(e2) { /* */ }
 
       var isOpen = false;
       function positionPanel() {
+        // getBoundingClientRect 返回视口坐标，与 fixed 基准一致
         var r = badge.getBoundingClientRect();
+        if (!r.width && !r.height && !r.top && !r.left) return;  // 徽标已不在文档中
         var vw = window.innerWidth || 800;
-        panel.style.left = Math.max(4, Math.min(r.left, vw - 300)) + 'px';
-        panel.style.top = (r.bottom + 6) + 'px';
+        var vh = window.innerHeight || 600;
+        panelHost.style.left = Math.max(4, Math.min(r.left, vw - 310)) + 'px';
+        // 视口下方放不下时翻转到徽标上方（估算面板高度 ~150px）
+        if (r.bottom + 156 > vh && r.top > 160) {
+          panelHost.style.top = '';
+          panelHost.style.bottom = (vh - r.top + 6) + 'px';
+        } else {
+          panelHost.style.bottom = '';
+          panelHost.style.top = (r.bottom + 6) + 'px';
+        }
       }
-      function openPanel() { positionPanel(); panel.classList.add('open'); isOpen = true; }
-      function closePanel() { panel.classList.remove('open'); isOpen = false; }
+      function openPanel() { positionPanel(); panelHost.style.display = 'block'; isOpen = true; }
+      function closePanel() { panelHost.style.display = 'none'; isOpen = false; }
       badge.addEventListener('mouseenter', openPanel);
       badge.addEventListener('mouseleave', closePanel);
       badge.addEventListener('click', function(e) {
@@ -2661,6 +2688,7 @@ function readCachedRules() {
 
       anchorEl.parentNode.insertBefore(hostSpan, anchorEl.nextSibling);
       anchorEl.__sfLinkBadge = hostSpan;
+      anchorEl.__sfLinkPanel = panelHost;
     } catch(e) { /* 极端 DOM 状态下静默 */ }
   }
 

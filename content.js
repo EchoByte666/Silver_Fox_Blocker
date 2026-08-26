@@ -2555,9 +2555,11 @@ function readCachedRules() {
   }
 
   // 微型评分卡片：closed Shadow DOM 注入（页面样式无法渗入，
-  // 页面也无法读取内部结构伪造）。五级视觉：
-  //   pending 蓝点脉冲+"检测中" / danger 红点+"危险" / warn 橙点+"可疑" /
-  //   safe 绿点 / unknown 灰点（后两者仅色点，不占空间语义）
+  // 页面也无法读取内部结构伪造）。视觉分级：
+  //   pending 蓝点脉冲+"检测中"（沙箱探测中）/ pendingIcp 琥珀点脉冲+
+  //   "ICP核验中"（备案核验中）/ danger 红点+"危险" / warn 橙点+"可疑" /
+  //   safe 绿点 / unknown 绿系色点——v2.3.5 起不用灰色：
+  //   未探测=淡绿、核验完成正常=正绿（灰色观感像"未完成任务"）
   // 悬停或点击徽标均弹出核查详情面板（结论/目标域/探测方式）；
   // 点击已 stopPropagation，不会触发链接跳转或页面自身点击逻辑。
   // v2.3.2：面板宿主挂在 documentElement 下（transform 祖先会把 fixed
@@ -2593,6 +2595,12 @@ function readCachedRules() {
         pendingIcp: { color: '#f9ab00', label: 'ICP核验中', cls: 'b pending' }
       };
       var m = META[verdict.level] || META.unknown;
+      // v2.3.5：unknown 分两档绿色——灰色观感像"任务没做完"，弃用。
+      //   未发起沙箱探测（纯静态核查无已知风险）→ 淡绿
+      //   探测/ICP 核验完成且正常 → 正绿（全流程核验通过的明确信号）
+      if (verdict.level === 'unknown') {
+        m = { color: verdict.probed ? '#188038' : '#a5d6a7', label: '', cls: 'b plain' };
+      }
       var probeText = verdict.level === 'pending'
         ? '正在后台沙箱探测…'
         : (verdict.probed ? '已沙箱访问（无 Cookie / 无 Referer）' : '未发起网络访问');
@@ -2600,7 +2608,9 @@ function readCachedRules() {
         verdict.level === 'pending' || verdict.level === 'pendingIcp' ? '' :
         verdict.level === 'danger' ? '—— 高风险，建议勿访问' :
         verdict.level === 'warn' ? '—— 存在可疑特征' :
-        verdict.level === 'safe' ? '—— 可信域名' : '—— 未发现已知风险';
+        verdict.level === 'safe' ? '—— 可信域名' :
+        verdict.level === 'unknown' ?
+          (verdict.probed ? '—— 已完成核验，未发现风险' : '—— 静态核查未见风险') : '';
 
       var hostSpan = document.createElement('span');
       hostSpan.className = 'sf-link-badge-host';

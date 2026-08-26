@@ -2490,6 +2490,10 @@ async function doSandboxProbe(url) {
 // 同注册域并发去重（多条链接指向同一站点只查一次）；queryIcpRecord 自带
 // 当日缓存与失败 5 分钟短缓存，此处仅做 Promise 级去重
 const _aiLinkIcpInFlight = new Map();
+// v2.3.7：整个裁决的硬超时——实测存在备案接口请求被安全软件（如卡巴斯基）
+// 拦截后悬而不决的场景，两个源串行各 8 秒也可能叠到 16 秒以上，
+// 徽标会一直停在"ICP核验中"。15 秒无结论按"核验超时"强制回落 warn
+const AI_LINK_ICP_TIMEOUT_MS = 15000;
 function verifyIcpForAiLink(registrable, hostname, susTag, httpStatus, finalHost) {
   let p = _aiLinkIcpInFlight.get(registrable);
   if (!p) {
@@ -2497,7 +2501,7 @@ function verifyIcpForAiLink(registrable, hostname, susTag, httpStatus, finalHost
     _aiLinkIcpInFlight.set(registrable, p);
     p.then(function() { _aiLinkIcpInFlight.delete(registrable); }, function() { /* */ });
   }
-  return p.then(function(icpInfo) {
+  const judged = p.then(function(icpInfo) {
     if (icpInfo && icpInfo.queried && icpInfo.hasIcp) {
       return { level: 'unknown', host: hostname, probed: true,
         reason: susTag + '；但该域名已持有有效 ICP 备案（' +
@@ -2513,6 +2517,15 @@ function verifyIcpForAiLink(registrable, hostname, susTag, httpStatus, finalHost
       reason: susTag + '；ICP 备案核验暂不可用，请谨慎访问（HTTP ' +
         httpStatus + redirectNote + '）' };
   });
+  return Promise.race([
+    judged,
+    new Promise(function(resolve) {
+      setTimeout(function() {
+        resolve({ level: 'warn', host: hostname, probed: true,
+          reason: susTag + '；ICP 备案核验超时（接口无响应，可能被安全软件拦截），请谨慎访问' });
+      }, AI_LINK_ICP_TIMEOUT_MS);
+    })
+  ]);
 }
 
 async function classifyAiChatLink(url) {
@@ -2607,7 +2620,19 @@ async function handleAiChatLinkScan(urls, tabId) {
               { action: 'aiLinkVerdict', url: url, verdict: verdict },
               function() { void chrome.runtime.lastError; });
           } catch(e) { /* */ }
-        }).catch(function() { /* */ });
+        }).catch(function() {
+          // v2.3.7：终局链路任何异常都必须落地结论并推送——
+          // 徽标绝不能停在"检测中/ICP核验中"过渡态
+          const fb = { level: 'warn', probed: true,
+            reason: '核验流程异常（已中止），请谨慎访问该链接' };
+          cacheAiLinkVerdict(url, fb);
+          if (tabId == null) return;
+          try {
+            chrome.tabs.sendMessage(tabId,
+              { action: 'aiLinkVerdict', url: url, verdict: fb },
+              function() { void chrome.runtime.lastError; });
+          } catch(e) { /* */ }
+        });
       } else {
         results[url] = outcome || { level: 'unknown', reason: '核查异常', probed: false };
       }

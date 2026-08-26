@@ -33,7 +33,7 @@ Chrome/Edge MV3 浏览器扩展：拦截"银狐"木马钓鱼/仿冒网站。
 - `HARDCODED_DOMAINS`：background.js 与 content.js 两处
 - `RULE_SOURCE_URLS`：background.js / offscreen.js / popup.js 三处
 - 默认白名单：background.js `DEFAULT_WHITELIST` 与 popup.js `BUILT_IN_WHITELIST`
-- `AI_CHAT_PLATFORM_DOMAINS` / `isAiChatHostname`（v2.3.0 可信 AI 对话平台豁免）：background.js 与 content.js 各一份，修改需两处同步；豁免语义=跳过品牌匹配 + manyEmoji 不加分 + ICP 三通道与后台 API 核验全跳过，黑名单/DNR 层不受影响
+- `AI_CHAT_PLATFORM_DOMAINS` / `isAiChatHostname`（v2.3.0 可信 AI 对话平台豁免）：background.js 与 content.js 各一份，修改需两处同步；豁免语义=跳过品牌匹配 + manyEmoji/officialSpeech 不加分 + ICP 三通道与后台 API 核验全跳过，黑名单/DNR 层不受影响
 - `matchesPatternDomain` / `isGovCn` / `levenshteinWithin1` 等工具函数在 background.js 与 content.js 各有一份，语义需保持一致
 - `uiLevelOf`（UI 层级判定 warn/notice/card/clear）：background.js 同步决策与 enhanceScoreAsync 对账共用同一规则，修改阈值时两处及 content.js 展示层同步
 - UI 层级切换统一走 content.js `applyScoreVerdict()`：同步回执与异步对账（scoreAdjusted）共用，新增层级相关逻辑时勿在分支里单独注入/移除 UI；同步回执必须携带 `effectiveTotal`（后台实际判定分），否则状态记录不一致会导致去重失效

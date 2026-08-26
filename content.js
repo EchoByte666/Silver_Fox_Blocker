@@ -1665,9 +1665,11 @@ function readCachedRules() {
     // "官方/安全/正版"三类话术齐备。
     // v2.1.2：+20 → +15——正规软件官网普遍使用同类文案（官网标配话术），
     // 三词齐备只能说明"像官网"，不能说明"假官网"
+    // v2.3.0a：AI 对话页豁免——这三个词是用户提问与模型输出里的普通词汇
+    //（"这是正版官网，安全下载"是对话常态），在 AIGC/UGC 语料下不构成证据
     var speechKinds = ['官方', '安全', '正版'].filter(function(word) { return analysisText.includes(word); });
     add('officialSpeech', '官方、安全、正版三类话术', 15,
-      !softwareCatalog && speechKinds.length >= 3, speechKinds.join('、'), 'speech');
+      !isAiChatPage && !softwareCatalog && speechKinds.length >= 3, speechKinds.join('、'), 'speech');
 
     // noah 系域名的 /api.php（银狐木马通信特征，+100 强特征：
     // 特异性极高，单项命中即可硬拦截，不受证据多样性约束）
@@ -2509,68 +2511,154 @@ function readCachedRules() {
     if (!aiChatActive) return;
     var items = collectExternalLinks();
     if (!items.length) return;
+    // 先挂"检测中"占位徽标（蓝点脉冲动画），后台回执后在原位替换为结论
+    items.forEach(function(item) {
+      injectLinkBadge(item.anchor, { level: 'pending' });
+    });
     try {
       chrome.runtime.sendMessage({
         action: 'scanAiChatLinks',
         urls: items.map(function(item) { return item.url; })
       }, function(response) {
         void chrome.runtime.lastError;
-        if (!response || !response.ok || !response.results) return;
+        if (!response || !response.ok || !response.results) {
+          // 后台不可用时撤掉占位动画，避免永远转圈
+          items.forEach(function(item) {
+            injectLinkBadge(item.anchor, { level: 'unknown', reason: '核查服务暂不可用' });
+          });
+          return;
+        }
         items.forEach(function(item) {
-          var verdict = response.results[item.url];
-          if (verdict) injectLinkBadge(item.anchor, verdict);
+          var verdict = response.results[item.url] ||
+            { level: 'unknown', reason: '未获得核查结果' };
+          injectLinkBadge(item.anchor, verdict);
         });
       });
     } catch(e) { /* 扩展上下文失效时静默 */ }
   }
 
   // 微型评分卡片：closed Shadow DOM 注入（页面样式无法渗入，
-  // 页面也无法读取内部结构伪造）。四级视觉：
-  //   danger 红点+"危险"胶囊 / warn 橙点+"可疑"胶囊 / safe 绿点 / unknown 灰点
-  // safe/unknown 仅色点不占空间语义；悬停显示核查结论与是否发起过探测
+  // 页面也无法读取内部结构伪造）。五级视觉：
+  //   pending 蓝点脉冲+"检测中" / danger 红点+"危险" / warn 橙点+"可疑" /
+  //   safe 绿点 / unknown 灰点（后两者仅色点，不占空间语义）
+  // 悬停或点击徽标均弹出核查详情面板（结论/目标域/探测方式）；
+  // 点击已 stopPropagation，不会触发链接跳转或页面自身点击逻辑
+  var activeBadgePanels = [];   // 打开中的面板 close 函数（滚动时统一收起）
+  var badgeScrollHooked = false;
+  function hookBadgeScroll() {
+    if (badgeScrollHooked) return;
+    badgeScrollHooked = true;
+    document.addEventListener('scroll', function() {
+      activeBadgePanels.forEach(function(close) { close(); });
+      if (activeBadgePanels.length > 200) activeBadgePanels.splice(0, 100);
+    }, true);
+  }
+
   function injectLinkBadge(anchorEl, verdict) {
     try {
       if (anchorEl.__sfLinkBadge && anchorEl.__sfLinkBadge.parentNode) {
         anchorEl.__sfLinkBadge.parentNode.removeChild(anchorEl.__sfLinkBadge);
       }
-      var colors = { danger: '#d93025', warn: '#e8710a', safe: '#188038', unknown: '#9aa0a6' };
-      var labels = { danger: '危险', warn: '可疑', safe: '', unknown: '' };
-      var color = colors[verdict.level] || colors.unknown;
-      var label = labels[verdict.level] || '';
+      var META = {
+        danger:  { color: '#d93025', label: '危险',   cls: 'b danger' },
+        warn:    { color: '#e8710a', label: '可疑',   cls: 'b warn' },
+        safe:    { color: '#188038', label: '',       cls: 'b plain' },
+        unknown: { color: '#9aa0a6', label: '',       cls: 'b plain' },
+        pending: { color: '#1a73e8', label: '检测中', cls: 'b pending' }
+      };
+      var m = META[verdict.level] || META.unknown;
+      var probeText = verdict.level === 'pending'
+        ? '正在后台沙箱探测…'
+        : (verdict.probed ? '已沙箱访问（无 Cookie / 无 Referer）' : '未发起网络访问');
+      var levelTitle = verdict.level === 'pending' ? '' :
+        verdict.level === 'danger' ? '—— 高风险，建议勿访问' :
+        verdict.level === 'warn' ? '—— 存在可疑特征' :
+        verdict.level === 'safe' ? '—— 可信域名' : '—— 未发现已知风险';
+
       var hostSpan = document.createElement('span');
       hostSpan.className = 'sf-link-badge-host';
       hostSpan.setAttribute('role', 'note');
-      hostSpan.setAttribute('aria-label', '链接风险核查：' + (verdict.reason || '未发现已知风险'));
+      hostSpan.setAttribute('aria-label', '链接风险核查：' + (verdict.reason || '核查中'));
       var shadow = hostSpan.attachShadow({ mode: 'closed' });
+
       var style = document.createElement('style');
       style.textContent =
         ':host{all:initial}' +
         '.b{display:inline-flex;align-items:center;gap:4px;height:16px;margin-left:5px;' +
         'padding:0 7px;border-radius:8px;vertical-align:middle;white-space:nowrap;' +
         'font:500 11px/16px system-ui,-apple-system,"Segoe UI",sans-serif;' +
-        'color:#5f6368;background:#f1f3f4;cursor:default;user-select:none}' +
+        'color:#5f6368;background:#f1f3f4;cursor:pointer;user-select:none}' +
         '.b.plain{padding:0;background:transparent}' +
         '.b.danger{color:#d93025;background:#fce8e6}' +
         '.b.warn{color:#b06000;background:#fef7e0}' +
+        '.b.pending{color:#1a73e8;background:#e8f0fe}' +
         '.d{width:7px;height:7px;border-radius:50%;flex:none}' +
-        '.b.plain .d{width:10px;height:10px}';
+        '.b.plain .d{width:10px;height:10px}' +
+        '@keyframes sfPulse{0%{opacity:.3}50%{opacity:1}100%{opacity:.3}}' +
+        '.b.pending .d{animation:sfPulse 1s ease-in-out infinite}' +
+        '.panel{position:fixed;z-index:2147483647;display:none;max-width:280px;' +
+        'padding:10px 12px;border-radius:8px;background:#fff;color:#202124;' +
+        'font:400 12px/1.7 system-ui,-apple-system,"Segoe UI",sans-serif;' +
+        'box-shadow:0 4px 16px rgba(0,0,0,.2);border:1px solid #dadce0}' +
+        '.panel.open{display:block}' +
+        '.panel .t{font-weight:600;margin-bottom:4px}' +
+        '.panel .row{display:flex;gap:6px;margin-top:2px}' +
+        '.panel .k{color:#5f6368;flex:none}';
       shadow.appendChild(style);
+
       var badge = document.createElement('span');
-      badge.className = 'b' + (label ? '' : ' plain') +
-        (verdict.level === 'danger' ? ' danger' : verdict.level === 'warn' ? ' warn' : '');
-      badge.title = '银狐拦截系统 · 链接核查\n' + (verdict.reason || '未发现已知风险') +
-        '\n目标：' + (verdict.host || '') +
-        '　探测：' + (verdict.probed ? '已沙箱访问（无 Cookie/无 Referer）' : '未发起访问');
+      badge.className = m.cls;
+      badge.setAttribute('role', 'button');
+      badge.setAttribute('aria-label', '查看链接核查详情');
       var dot = document.createElement('span');
       dot.className = 'd';
-      dot.style.background = color;
+      dot.style.background = m.color;
       badge.appendChild(dot);
-      if (label) {
-        var text = document.createElement('span');
-        text.textContent = label;   // textContent 防注入（reason/host 不进 HTML）
-        badge.appendChild(text);
+      if (m.label) {
+        var txt = document.createElement('span');
+        txt.textContent = m.label;  // textContent 防注入（reason/host 不进 HTML）
+        badge.appendChild(txt);
       }
       shadow.appendChild(badge);
+
+      // 详情面板：悬停 / 点击均可呼出；fixed 定位防容器 overflow 裁剪
+      var panel = document.createElement('div');
+      panel.className = 'panel';
+      var title = document.createElement('div');
+      title.className = 't';
+      title.textContent = '银狐拦截系统 · 链接核查' + levelTitle;
+      panel.appendChild(title);
+      [['结论', verdict.reason || (verdict.level === 'pending' ? '正在核查…' : '未发现已知风险')],
+       ['目标', verdict.host || ''],
+       ['探测', probeText]].forEach(function(pair) {
+        if (!pair[1]) return;
+        var row = document.createElement('div');
+        row.className = 'row';
+        var k = document.createElement('span'); k.className = 'k'; k.textContent = pair[0];
+        var v = document.createElement('span'); v.textContent = pair[1];
+        row.appendChild(k); row.appendChild(v); panel.appendChild(row);
+      });
+      shadow.appendChild(panel);
+
+      var isOpen = false;
+      function positionPanel() {
+        var r = badge.getBoundingClientRect();
+        var vw = window.innerWidth || 800;
+        panel.style.left = Math.max(4, Math.min(r.left, vw - 300)) + 'px';
+        panel.style.top = (r.bottom + 6) + 'px';
+      }
+      function openPanel() { positionPanel(); panel.classList.add('open'); isOpen = true; }
+      function closePanel() { panel.classList.remove('open'); isOpen = false; }
+      badge.addEventListener('mouseenter', openPanel);
+      badge.addEventListener('mouseleave', closePanel);
+      badge.addEventListener('click', function(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        if (isOpen) closePanel(); else openPanel();
+      });
+      hookBadgeScroll();
+      activeBadgePanels.push(closePanel);
+
       anchorEl.parentNode.insertBefore(hostSpan, anchorEl.nextSibling);
       anchorEl.__sfLinkBadge = hostSpan;
     } catch(e) { /* 极端 DOM 状态下静默 */ }

@@ -658,9 +658,11 @@ async function enhanceScoreAsync(tabId, url, result) {
     try { hostname = new URL(url).hostname.toLowerCase(); } catch(e) { return; }
     const domain = getRegistrableDomain(hostname);
     if (!domain) return;
-    // 域龄始终查；ICP 仅当页面已声明合规备案号时才查（content.js icpClaimed）
+    // 域龄始终查；ICP 仅当页面已声明合规备案号时才查（content.js icpClaimed）。
+    // v2.3.0：可信 AI 对话页强制跳过 ICP 核验——对话内容里的备案号是
+    // AIGC/UGC 文本而非页脚声明，"盗用备案"+30/"查无备案"+20 惩罚不生效
     const ageInfo = await queryDomainAge(domain);
-    const icpInfo = result.icpClaimed
+    const icpInfo = (result.icpClaimed && !result.aiChatPage)
       ? await queryIcpRecord(domain)
       : skipIcpQueryResult();
 
@@ -868,12 +870,14 @@ function applyBrandCheck(result, url) {
   try { hostname = new URL(url).hostname.toLowerCase(); } catch(e) { return result; }
   // v2.1.5：开发者平台与搜索引擎豁免（与 content.js 同名表两处同步）——
   // 平台页面对品牌的提及是文档/讨论语境，搜索结果页标题必然包含用户
-  // 查询的品牌词，均为"提及"而非"冒充"，整体跳过补检
+  // 查询的品牌词，均为"提及"而非"冒充"，整体跳过补检。
+  // v2.3.0：可信 AI 对话页同列豁免——对话正文/标题高频出现任意品牌词
+  //（用户提问即决定），是问答语境而非冒充
   if (DEVELOPER_PLATFORM_DOMAINS.some(function(platformDomain) {
     return hostname === platformDomain || hostname.endsWith('.' + platformDomain);
   }) || SEARCH_ENGINE_DOMAINS.some(function(searchDomain) {
     return hostname === searchDomain || hostname.endsWith('.' + searchDomain);
-  })) return result;
+  }) || isAiChatHostname(hostname)) return result;
   const title = String(result.title || '').toLowerCase().replace(/\s+/g, '');
   const brandHint = String(result.brand || '').toLowerCase().replace(/\s+/g, '');
   let matchedBrand = null;
@@ -1016,6 +1020,32 @@ const SEARCH_ENGINE_DOMAINS = [
   'naver.com', 'daum.net', 'yahoo.co.jp', 'goo.ne.jp',
   'go.mail.ru', 'rambler.ru', 'seznam.cz'
 ];
+
+// ===== v2.3.0：可信 AI 对话平台豁免表 =====
+// 对话页面是 AIGC + UGC 混合语料（详见 content.js 同名表注释，两处同步）。
+// 后台侧影响：
+//   1) applyBrandCheck 整体跳过——对话标题/正文提及品牌是问答语境不是冒充；
+//   2) enhanceScoreAsync / queryDomainIntel 跳过 ICP API 核验——对话中出现的
+//      备案号是内容而非页脚声明，"盗用备案"+20/+30 惩罚不落在平台头上。
+// 黑名单/DNR 拦截层不受影响，误加自营域无放行恶意站风险
+const AI_CHAT_PLATFORM_DOMAINS = [
+  // 国际主流
+  'chatgpt.com', 'openai.com', 'claude.ai', 'gemini.google.com', 'grok.com',
+  'x.ai', 'copilot.microsoft.com', 'chat.mistral.ai', 'mistral.ai',
+  'poe.com', 'character.ai', 'perplexity.ai',
+  // 中国大陆主流
+  'deepseek.com', 'kimi.moonshot.cn', 'moonshot.cn', 'kimi.com',
+  'yiyan.baidu.com', 'tongyi.aliyun.com', 'tongyi.com', 'chatglm.cn',
+  'bigmodel.cn', 'doubao.com', 'yuanbao.tencent.com', 'xinghuo.xfyun.cn',
+  'chat.qwen.ai', 'qwen.ai', 'tiangong.cn', 'chat.minimaxi.com'
+];
+
+function isAiChatHostname(hostname) {
+  hostname = String(hostname || '').toLowerCase().replace(/^\.+|\.+$/g, '');
+  return AI_CHAT_PLATFORM_DOMAINS.some(function(domain) {
+    return hostname === domain || hostname.endsWith('.' + domain);
+  });
+}
 
 // ===== 品牌关键词本地修正表（v2.1.0 新增）=====
 // 远程品牌库的关键词可能过泛，导致正规网站被误判品牌冒充。典型案例：
@@ -2219,8 +2249,139 @@ try {
   });
 } catch(e) { /* */ }
 
+// ===== v2.3.0：AI 对话页外链核查（沙箱防追踪探测）=====
+// 对话中由 AI 给出的链接可能是幻觉域名/钓鱼站/被入侵站。分级策略：
+//   danger  已知恶意（内置投毒库/黑名单命中；或探测后发现重定向落地恶意域）
+//   warn    可疑（连字符模式域名，探测后维持并附探测结论）
+//   safe    官方/白名单/政府域
+//   unknown 无已知风险且未探测——不对每条外链发请求，避免无谓网络行为
+// 探测仅在"域名形态可疑"时触发，且全程防追踪：
+//   credentials:'omit'          不携带任何 Cookie/凭证
+//   referrerPolicy:'no-referrer' 不泄露来源页（对话内容不出本机）
+//   cache:'no-store'            不读写 HTTP 缓存
+//   不读取响应体                 仅取最终 URL 与状态码
+const _aiLinkVerdictCache = new Map();        // url → { verdict, ts }
+const AI_LINK_CACHE_TTL_MS = 30 * 60 * 1000;  // 结论缓存 30 分钟
+const AI_LINK_CACHE_MAX = 300;
+const AI_LINK_PROBE_TIMEOUT_MS = 8000;
+const AI_LINK_BATCH_MAX = 20;
+
+function getCachedAiLinkVerdict(url) {
+  const hit = _aiLinkVerdictCache.get(url);
+  if (!hit) return null;
+  if (Date.now() - hit.ts > AI_LINK_CACHE_TTL_MS) { _aiLinkVerdictCache.delete(url); return null; }
+  return hit.verdict;
+}
+
+function cacheAiLinkVerdict(url, verdict) {
+  _aiLinkVerdictCache.set(url, { verdict: verdict, ts: Date.now() });
+  if (_aiLinkVerdictCache.size > AI_LINK_CACHE_MAX) {
+    _aiLinkVerdictCache.delete(_aiLinkVerdictCache.keys().next().value);
+  }
+  return verdict;
+}
+
+function isHardcodedHost(hostname) {
+  return HARDCODED_DOMAINS.indexOf(hostname) !== -1 ||
+    HARDCODED_DOMAINS.some(function(d) { return hostname.endsWith('.' + d); });
+}
+
+// 沙箱防追踪探测：跟随重定向取最终落点，不读响应体，8 秒超时
+async function sandboxProbeUrl(url) {
+  const controller = new AbortController();
+  const timer = setTimeout(function() { controller.abort(); }, AI_LINK_PROBE_TIMEOUT_MS);
+  try {
+    const resp = await fetch(url, {
+      method: 'GET',
+      credentials: 'omit',
+      cache: 'no-store',
+      redirect: 'follow',
+      referrerPolicy: 'no-referrer',
+      headers: { 'Accept': 'text/html,application/xhtml+xml;q=0.9,*/*;q=0.5' },
+      signal: controller.signal
+    });
+    return { ok: true, status: resp.status, finalUrl: resp.url || url };
+  } catch(e) {
+    return { ok: false, error: String(e && e.name === 'AbortError' ? '超时' : '网络错误') };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function classifyAiChatLink(url) {
+  const cached = getCachedAiLinkVerdict(url);
+  if (cached) return cached;
+  let parsed;
+  try { parsed = new URL(url); } catch(e) {
+    return { level: 'unknown', reason: '无法解析的地址', probed: false };
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    return { level: 'unknown', reason: '非网页协议', probed: false };
+  }
+  const hostname = parsed.hostname.toLowerCase();
+  await refreshWhitelistCache();
+  // 白名单/政府域直接定 safe（与 scorePage 同一套豁免口径）
+  const whitelisted = setMatches(cloudWhitelistSet, hostname) ||
+    isDefaultWhitelisted(hostname) || matchesLocalWhitelist(url) ||
+    isRecentlyBypassed(url) || isGovCn(hostname);
+  if (whitelisted) {
+    return cacheAiLinkVerdict(url, { level: 'safe', host: hostname, probed: false,
+      reason: '官方或可信域名（白名单命中）' });
+  }
+  // 已知恶意：直接定级，不向恶意基础设施发起任何请求
+  if (isHardcodedHost(hostname)) {
+    return cacheAiLinkVerdict(url, { level: 'danger', host: hostname, probed: false,
+      reason: '已知银狐投毒域名（内置库）' });
+  }
+  if (setMatches(blocklistSet, hostname)) {
+    return cacheAiLinkVerdict(url, { level: 'danger', host: hostname, probed: false,
+      reason: '恶意域名黑名单命中' });
+  }
+  // 非可疑形态：不定级不发请求（unknown 仅色点提示）
+  const pattern = matchesPatternDomain(hostname);
+  if (!pattern) {
+    return cacheAiLinkVerdict(url, { level: 'unknown', host: hostname, probed: false,
+      reason: '未发现已知风险（未发起访问）' });
+  }
+  // 可疑连字符模式域名：沙箱防追踪探测，重点核对重定向落地点
+  const probe = await sandboxProbeUrl(url);
+  if (!probe.ok) {
+    return cacheAiLinkVerdict(url, { level: 'warn', host: hostname, probed: true,
+      reason: '可疑连字符域名模式；沙箱探测失败（' + probe.error + '），请谨慎访问' });
+  }
+  let finalHost = '';
+  try { finalHost = new URL(probe.finalUrl).hostname.toLowerCase(); } catch(e) { /* */ }
+  if (finalHost && (isHardcodedHost(finalHost) || setMatches(blocklistSet, finalHost))) {
+    return cacheAiLinkVerdict(url, { level: 'danger', host: hostname, probed: true,
+      reason: '重定向至恶意域名：' + finalHost });
+  }
+  return cacheAiLinkVerdict(url, { level: 'warn', host: hostname, probed: true,
+    reason: '可疑连字符域名模式（HTTP ' + probe.status +
+      (finalHost && finalHost !== hostname ? '，重定向至 ' + finalHost : '，可直接访问') + '）' });
+}
+
+async function handleAiChatLinkScan(urls) {
+  const list = (Array.isArray(urls) ? urls : []).slice(0, AI_LINK_BATCH_MAX);
+  const results = {};
+  for (const url of list) {
+    try { results[url] = await classifyAiChatLink(url); }
+    catch(e) { results[url] = { level: 'unknown', reason: '核查异常', probed: false }; }
+  }
+  return results;
+}
+
 // 消息处理中心：popup / warning / content 脚本的请求入口
 chrome.runtime.onMessage.addListener(function(msg, sender, sendResponse) {
+  // v2.3.0：AI 对话页外链核查（content.js 仅在可信 AI 对话平台发送）。
+  // 静态分级即时返回；可疑模式域名的沙箱探测异步完成后一并回执
+  if (msg.action === 'scanAiChatLinks') {
+    handleAiChatLinkScan(msg.urls).then(function(results) {
+      sendResponse({ ok: true, results: results });
+    }).catch(function() {
+      sendResponse({ ok: false });  // 兜底：防止发送方永久挂起
+    });
+    return true;
+  }
   if (msg.action === 'refreshRules') {
     // 立即回执"已开始"：规则拉取可能耗时较长（多个远程源依次尝试），
     // 不能让消息通道一直挂起等待，否则 popup 的 await 会永久 pending。
@@ -2348,7 +2509,9 @@ chrome.runtime.onMessage.addListener(function(msg, sender, sendResponse) {
           sendResponse({ ok: false, reason: 'invalid_url' });
           return;
         }
-        const icpClaimed = !!msg.icpClaimed;
+        // v2.3.0：可信 AI 对话页不核验 ICP——对话内备案号是 AIGC/UGC 内容
+        // 而非页面声明，popup 的"盗用备案"展示惩罚不生效
+        const icpClaimed = !!msg.icpClaimed && !isAiChatHostname(domain);
         const ageInfo = await queryDomainAge(domain);
         const icpInfo = icpClaimed ? await queryIcpRecord(domain) : skipIcpQueryResult();
         debug('queryDomainIntel domain=' + domain + ' age=' + ageInfo.creationDays +

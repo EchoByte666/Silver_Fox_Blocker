@@ -123,6 +123,37 @@ const SEARCH_ENGINE_DOMAINS = [
   'go.mail.ru', 'rambler.ru', 'seznam.cz'
 ];
 
+// ===== v2.3.0：可信 AI 对话平台豁免表 =====
+// 对话页面是 AIGC + UGC 混合语料：正文包含用户输入与模型输出的任意内容
+// （用户可能让 AI"帮我写一个卖火绒软件的官网文案"，页面文本随即出现全套
+// 话术/品牌词/备案号模板）。针对"下载站/官网"设计的文本启发式指标在此
+// 全部失真。命中本表（含子域名）的页面：
+//   1) 跳过品牌匹配——对话中提及品牌是问答语境，不是冒充
+//   2) 不加"大量表情符号"分——AI 回复天然高频使用表情符号
+//   3) ICP 备案三通道整体跳过（含后台 API 核验）——对话里出现的任何备案号
+//      都是内容而非页脚声明，"盗用备案"+20/+30 惩罚不能落在平台头上
+// 注意：background.js 中有相同列表（applyBrandCheck 用），修改时需两处同步；
+// 新增条目须为 AI 对话方自营域名（豁免只影响文本评分层，
+// 黑名单/DNR 拦截层不受影响，误加自营域无放行恶意站风险）
+const AI_CHAT_PLATFORM_DOMAINS = [
+  // 国际主流
+  'chatgpt.com', 'openai.com', 'claude.ai', 'gemini.google.com', 'grok.com',
+  'x.ai', 'copilot.microsoft.com', 'chat.mistral.ai', 'mistral.ai',
+  'poe.com', 'character.ai', 'perplexity.ai',
+  // 中国大陆主流
+  'deepseek.com', 'kimi.moonshot.cn', 'moonshot.cn', 'kimi.com',
+  'yiyan.baidu.com', 'tongyi.aliyun.com', 'tongyi.com', 'chatglm.cn',
+  'bigmodel.cn', 'doubao.com', 'yuanbao.tencent.com', 'xinghuo.xfyun.cn',
+  'chat.qwen.ai', 'qwen.ai', 'tiangong.cn', 'chat.minimaxi.com'
+];
+
+function isAiChatHostname(hostname) {
+  hostname = String(hostname || '').toLowerCase().replace(/^\.+|\.+$/g, '');
+  return AI_CHAT_PLATFORM_DOMAINS.some(function(domain) {
+    return hostname === domain || hostname.endsWith('.' + domain);
+  });
+}
+
 // ===== v2.1.0：官方标识检测（降误报核心）=====
 // 检测页面是否挂有"党政机关/事业单位"官方标识——此类标识由机构申请并
 // 挂载在页脚（典型形态见 CONAC 全国党政机关事业单位互联网网站标识：
@@ -1625,6 +1656,11 @@ function readCachedRules() {
       labels[labels.length - 2].includes('-'));
     add('patternDomain', '连字符 com.cn/hl.cn/cc 域名', 15, patternDomain, patternDomain ? host : '', 'domain');
 
+    // v2.3.0：可信 AI 对话平台识别（豁免表见文件顶部 AI_CHAT_PLATFORM_DOMAINS）。
+    // 影响范围：manyEmoji / ICP 三通道（下方）/ 品牌匹配（brand 区段）；
+    // 黑名单与强特征（noah/adseo）检测不受影响
+    var isAiChatPage = isAiChatHostname(host);
+
     // ---- 话术类指标 ----
     // "官方/安全/正版"三类话术齐备。
     // v2.1.2：+20 → +15——正规软件官网普遍使用同类文案（官网标配话术），
@@ -1774,14 +1810,16 @@ function readCachedRules() {
     // v2.1.5：开发者平台与搜索引擎豁免（两表均与 background.js 同名表
     // 两处同步）——平台页面提及品牌是文档/讨论语境，搜索结果页标题
     // 必然包含用户查询的品牌词，均为"提及"而非"冒充"，
-    // 命中任一豁免即跳过匹配，使全部 brand 类指标失效
+    // 命中任一豁免即跳过匹配，使全部 brand 类指标失效。
+    // v2.3.0：可信 AI 对话页同列豁免——对话正文/标题高频出现任意品牌词
+    //（用户提问即决定），是问答语境而非冒充
     var isDeveloperPlatform = DEVELOPER_PLATFORM_DOMAINS.some(function(platformDomain) {
       return host === platformDomain || host.endsWith('.' + platformDomain);
     });
     var isSearchEngine = SEARCH_ENGINE_DOMAINS.some(function(searchDomain) {
       return host === searchDomain || host.endsWith('.' + searchDomain);
     });
-    var matchedBrandRule = (isDeveloperPlatform || isSearchEngine) ? null : brandConfig.find(function(rule) {
+    var matchedBrandRule = (isDeveloperPlatform || isSearchEngine || isAiChatPage) ? null : brandConfig.find(function(rule) {
       return matchesBrand(rule, combinedBrandText);
     });
     // 命中档位：3=页面标题 / 2=h1 主标题 / 1=仅 SEO 元数据
@@ -2163,9 +2201,10 @@ function readCachedRules() {
       !softwareCatalog && softwareDownloadContext && safetyCount >= 10, safetyCount + ' 次', 'speech');
 
     // 大量表情符号（≥6 个，低质模板站特征，+20）
+    // v2.3.0：AI 对话页豁免——AI 回复天然高频使用表情符号，此指标在对话页失真
     var emojiCount = 0;
     try { emojiCount = (text.match(/\p{Extended_Pictographic}/gu) || []).length; } catch(e) { /* */ }
-    add('manyEmoji', '大量表情符号', 20, emojiCount >= 6, emojiCount + ' 个', 'structure');
+    add('manyEmoji', '大量表情符号', 20, !isAiChatPage && emojiCount >= 6, emojiCount + ' 个', 'structure');
 
     // 大量内嵌 CSS 及注释（AI 生成模板痕迹，+10）
     var inlineCss = Array.from(document.querySelectorAll('style')).map(function(el) { return el.textContent || ''; }).join('\n');
@@ -2200,18 +2239,24 @@ function readCachedRules() {
       if (digits.length >= 6 && (asc.indexOf(digits) !== -1 || desc.indexOf(digits) !== -1)) return true; // 顺序数字
       return false;
     };
-    // 通道一（高可信）：指向工信部备案系统的链接文本中提取合规备案号
-    try {
-      var beianLinks = document.querySelectorAll('a[href*="beian.miit.gov.cn"], a[href*="beian.miit.gov"]');
-      for (var bi = 0; bi < beianLinks.length && !icpLinkedMatch; bi++) {
-        var bm = (beianLinks[bi].textContent || '').match(ICP_REGEX);
-        if (bm && !icpIsFakeNumber(bm[0])) icpLinkedMatch = bm[0];
+    // v2.3.0：AI 对话页 ICP 豁免——对话内容（AIGC/UGC）可能包含用户粘贴的
+    // 任意备案号文本，页面脚注备案属于平台而非对话内容，三通道整体跳过；
+    // icpClaimed 恒为 false → 后台跳过 ICP API 核验，
+    // "声明备案但查无记录"的盗用备案 +20/+30 惩罚不会落在 AI 平台头上
+    if (!isAiChatPage) {
+      // 通道一（高可信）：指向工信部备案系统的链接文本中提取合规备案号
+      try {
+        var beianLinks = document.querySelectorAll('a[href*="beian.miit.gov.cn"], a[href*="beian.miit.gov"]');
+        for (var bi = 0; bi < beianLinks.length && !icpLinkedMatch; bi++) {
+          var bm = (beianLinks[bi].textContent || '').match(ICP_REGEX);
+          if (bm && !icpIsFakeNumber(bm[0])) icpLinkedMatch = bm[0];
+        }
+      } catch(e) { /* */ }
+      // 通道二（低可信）：页面文本兜底扫描（不含链接通道时才生效）
+      if (!icpLinkedMatch) {
+        var tm = analysisText.match(ICP_REGEX);
+        if (tm && !icpIsFakeNumber(tm[0])) icpTextMatch = tm[0];
       }
-    } catch(e) { /* */ }
-    // 通道二（低可信）：页面文本兜底扫描（不含链接通道时才生效）
-    if (!icpLinkedMatch) {
-      var tm = analysisText.match(ICP_REGEX);
-      if (tm && !icpIsFakeNumber(tm[0])) icpTextMatch = tm[0];
     }
     // 声明备案标记：供 background 的 ICP API 异步核验使用（页面声明了备案
     // 但 API 查无 → 伪造备案，+20 分升级风险，见 background enhanceScoreAsync）
@@ -2260,6 +2305,9 @@ function readCachedRules() {
       categories: categoryCount, categoriesList: Object.keys(matchedCategories),
       strongSignal: strongSignal,
       icpClaimed: icpClaimed,
+      // v2.3.0：可信 AI 对话页标记——后台据此跳过品牌补检与 ICP API 核验，
+      // 并激活外链核查通道（见 background scanAiChatLinks）
+      aiChatPage: isAiChatPage,
       // v2.2.0：页面声明的合规备案号原文——供后台与 API 备案记录做
       // 一致性比对（一致 -80 / 不符 +30，见 enhanceScoreAsync 三态核验）
       icpNumber: icpLinkedMatch || icpTextMatch || '',
@@ -2362,6 +2410,8 @@ function readCachedRules() {
       }
     });
     scheduleEvaluate();
+    // v2.3.0：AI 对话页外链扫描联动（非 AI 页面为空操作，见文件尾部模块）
+    scheduleLinkScan();
   });
 
   observer.observe(document, {
@@ -2409,4 +2459,124 @@ function readCachedRules() {
   });
   // load 事件兜底：确保首屏评分一定会执行
   window.addEventListener('load', scheduleEvaluate, { once: true });
+
+  // ===== v2.3.0：AI 对话页外链风险标注 =====
+  // 仅在可信 AI 对话平台的顶层框架激活。对话中的链接是 AIGC 输出，
+  // 可能是幻觉域名、钓鱼仿冒站或被入侵站点——对每条跨站外链请求后台
+  // 核查（黑名单/白名单/可疑模式），连字符可疑模式域名再由后台以
+  // "沙箱防追踪"方式探测（无 Cookie、无 Referer、不读响应体、8 秒超时），
+  // 结果以微型徽标标注在链接旁。
+  // 体验约束：16px 高内联徽标不改变布局流；safe/unknown 仅显示色点；
+  // 不拦截点击、不修改链接本身；流式输出增量渲染时经 WeakMap 去重，
+  // 只处理新增/地址变更的锚点。
+  // scheduleLinkScan 由上方 MutationObserver 回调调用（函数声明提升，先调后定义安全）
+  var aiChatActive = (window.top === window) && isAiChatHostname(location.hostname);
+  var linkScanTimer = null;
+  var processedAnchors = typeof WeakMap !== 'undefined' ? new WeakMap() : null;
+  var LINK_SCAN_MAX_PER_BATCH = 15;
+
+  function scheduleLinkScan() {
+    if (!aiChatActive || !processedAnchors) return;
+    if (linkScanTimer) clearTimeout(linkScanTimer);
+    // 流式输出期间 DOM 高频变化，600ms 防抖合并为一次扫描
+    linkScanTimer = setTimeout(runLinkScan, 600);
+  }
+
+  // 收集本轮待核查锚点：http(s) 跨站外链、未处理过或 href 已变更的
+  function collectExternalLinks() {
+    var pageHost = location.hostname.toLowerCase();
+    var found = [];
+    var anchors = document.querySelectorAll('a[href]');
+    for (var i = 0; i < anchors.length && found.length < LINK_SCAN_MAX_PER_BATCH; i++) {
+      var anchorEl = anchors[i];
+      var href = anchorEl.getAttribute('href') || '';
+      if (!/^https?:\/\//i.test(href)) continue;      // 相对路径/锚点/js: 协议跳过
+      var absUrl;
+      try { absUrl = new URL(href, location.href).href; } catch(e) { continue; }
+      if (processedAnchors.get(anchorEl) === absUrl) continue; // 已按此地址处理过
+      processedAnchors.set(anchorEl, absUrl);
+      var targetHost = '';
+      try { targetHost = new URL(absUrl).hostname.toLowerCase(); } catch(e) { continue; }
+      if (!targetHost) continue;
+      if (isSameSiteHost(targetHost, pageHost)) continue;       // 站内链接不标注
+      found.push({ anchor: anchorEl, url: absUrl });
+    }
+    return found;
+  }
+
+  function runLinkScan() {
+    linkScanTimer = null;
+    if (!aiChatActive) return;
+    var items = collectExternalLinks();
+    if (!items.length) return;
+    try {
+      chrome.runtime.sendMessage({
+        action: 'scanAiChatLinks',
+        urls: items.map(function(item) { return item.url; })
+      }, function(response) {
+        void chrome.runtime.lastError;
+        if (!response || !response.ok || !response.results) return;
+        items.forEach(function(item) {
+          var verdict = response.results[item.url];
+          if (verdict) injectLinkBadge(item.anchor, verdict);
+        });
+      });
+    } catch(e) { /* 扩展上下文失效时静默 */ }
+  }
+
+  // 微型评分卡片：closed Shadow DOM 注入（页面样式无法渗入，
+  // 页面也无法读取内部结构伪造）。四级视觉：
+  //   danger 红点+"危险"胶囊 / warn 橙点+"可疑"胶囊 / safe 绿点 / unknown 灰点
+  // safe/unknown 仅色点不占空间语义；悬停显示核查结论与是否发起过探测
+  function injectLinkBadge(anchorEl, verdict) {
+    try {
+      if (anchorEl.__sfLinkBadge && anchorEl.__sfLinkBadge.parentNode) {
+        anchorEl.__sfLinkBadge.parentNode.removeChild(anchorEl.__sfLinkBadge);
+      }
+      var colors = { danger: '#d93025', warn: '#e8710a', safe: '#188038', unknown: '#9aa0a6' };
+      var labels = { danger: '危险', warn: '可疑', safe: '', unknown: '' };
+      var color = colors[verdict.level] || colors.unknown;
+      var label = labels[verdict.level] || '';
+      var hostSpan = document.createElement('span');
+      hostSpan.className = 'sf-link-badge-host';
+      hostSpan.setAttribute('role', 'note');
+      hostSpan.setAttribute('aria-label', '链接风险核查：' + (verdict.reason || '未发现已知风险'));
+      var shadow = hostSpan.attachShadow({ mode: 'closed' });
+      var style = document.createElement('style');
+      style.textContent =
+        ':host{all:initial}' +
+        '.b{display:inline-flex;align-items:center;gap:4px;height:16px;margin-left:5px;' +
+        'padding:0 7px;border-radius:8px;vertical-align:middle;white-space:nowrap;' +
+        'font:500 11px/16px system-ui,-apple-system,"Segoe UI",sans-serif;' +
+        'color:#5f6368;background:#f1f3f4;cursor:default;user-select:none}' +
+        '.b.plain{padding:0;background:transparent}' +
+        '.b.danger{color:#d93025;background:#fce8e6}' +
+        '.b.warn{color:#b06000;background:#fef7e0}' +
+        '.d{width:7px;height:7px;border-radius:50%;flex:none}' +
+        '.b.plain .d{width:10px;height:10px}';
+      shadow.appendChild(style);
+      var badge = document.createElement('span');
+      badge.className = 'b' + (label ? '' : ' plain') +
+        (verdict.level === 'danger' ? ' danger' : verdict.level === 'warn' ? ' warn' : '');
+      badge.title = '银狐拦截系统 · 链接核查\n' + (verdict.reason || '未发现已知风险') +
+        '\n目标：' + (verdict.host || '') +
+        '　探测：' + (verdict.probed ? '已沙箱访问（无 Cookie/无 Referer）' : '未发起访问');
+      var dot = document.createElement('span');
+      dot.className = 'd';
+      dot.style.background = color;
+      badge.appendChild(dot);
+      if (label) {
+        var text = document.createElement('span');
+        text.textContent = label;   // textContent 防注入（reason/host 不进 HTML）
+        badge.appendChild(text);
+      }
+      shadow.appendChild(badge);
+      anchorEl.parentNode.insertBefore(hostSpan, anchorEl.nextSibling);
+      anchorEl.__sfLinkBadge = hostSpan;
+    } catch(e) { /* 极端 DOM 状态下静默 */ }
+  }
+
+  // 初始扫描兜底：load 后延迟一次（等首批对话内容渲染完成）；
+  // 后续增量内容由 MutationObserver → scheduleLinkScan 驱动
+  if (aiChatActive) setTimeout(runLinkScan, 1200);
 })();

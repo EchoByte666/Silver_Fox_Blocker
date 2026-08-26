@@ -248,11 +248,16 @@ function renderIntel(intel, baseTotal, threshold, icpClaimed, claimedIcpNumber) 
     icpPoints.textContent = '—';
   } else if (intel.icpHas) {
     // v2.2.0 三态核验：域名已备案时比对页面声明号码与 API 记录——
-    //   数字段一致 → -80（强信任证据）；对不上 → +30（涉嫌盗用他人备案号）
+    //   主体号一致 → -80（强信任证据）；对不上 → +30（涉嫌盗用他人备案号）。
+    // v2.3.8：与 background.js icpNumbersMatch 同步修复——先剥掉尾部
+    //   「-N 网站序号」（页面常写主体号、API 常返回带序号网站号，同一主体）
     const claimed = String(claimedIcpNumber || '');
-    const digitsOf = function(s) { return String(s || '').replace(/\D+/g, ''); };
+    const baseDigitsOf = function(s) {
+      return String(s || '').replace(/-\d+\s*$/, '').replace(/\D+/g, '');
+    };
     if (claimed && intel.icpNumber &&
-        digitsOf(claimed) !== '' && digitsOf(claimed) === digitsOf(intel.icpNumber)) {
+        baseDigitsOf(claimed) !== '' &&
+        baseDigitsOf(claimed) === baseDigitsOf(intel.icpNumber)) {
       bonus -= 80;
       icpLabel.textContent = '备案号核验一致 · ' + claimed + ' 与 ' +
         intel.domain + ' 备案记录相符（API 核验）';

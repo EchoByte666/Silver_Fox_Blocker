@@ -593,12 +593,18 @@ const AGE_MATURE_BONUS = -15;
 const ICP_MATCH_BONUS = -80;   // 备案号核验一致 → 大幅减分
 const ICP_STOLEN_PENALTY = 30; // 域名已备案但页面号码对不上 → 盗用他人备案号
 
-// 备案号一致性比对：只比数字段（"京ICP备2021035678号-1"与
-// "京ICP备2021035678号" 视为同一主体），任一缺失则无法判定一致性
+// 备案号一致性比对：工信部格式为「主体备案号」+ 可选「-N 网站序号」——
+// 沪ICP备18008322号（主体号）与 沪ICP备18008322号-1（该主体的第 1 个网站）
+// 是同一主体；页面页脚常声明主体号，API 返回带序号的网站号。
+// v2.3.8 修复：必须先剥掉尾部的 -N 序号再比数字段，否则序号会被
+// \D 过滤拼进数字串导致正规站被误判"盗用备案"（luogu.com.cn 实测误报）。
+// 任一缺失则无法判定一致性
 function icpNumbersMatch(claimed, apiNumber) {
-  const digits = function(s) { return String(s || '').replace(/\D+/g, ''); };
-  return !!claimed && !!apiNumber && digits(claimed) !== '' &&
-    digits(claimed) === digits(apiNumber);
+  const baseDigits = function(s) {
+    return String(s || '').replace(/-\d+\s*$/, '').replace(/\D+/g, '');
+  };
+  return !!claimed && !!apiNumber && baseDigits(claimed) !== '' &&
+    baseDigits(claimed) === baseDigits(apiNumber);
 }
 
 // --- 异步增强与升级拦截 ---

@@ -693,9 +693,10 @@ async function enhanceScoreAsync(tabId, url, result) {
     if (!domain) return;
     // 域龄始终查；ICP 仅当页面已声明合规备案号时才查（content.js icpClaimed）。
     // v2.3.0：可信 AI 对话页强制跳过 ICP 核验——对话内容里的备案号是
-    // AIGC/UGC 文本而非页脚声明，"盗用备案"+30/"查无备案"+20 惩罚不生效
+    // AIGC/UGC 文本而非页脚声明，"盗用备案"+30/"查无备案"+20 惩罚不生效。
+    // v2.4.0：UGC 平台（ugcPage）同列豁免——帖子里粘贴的备案号同样是内容
     const ageInfo = await queryDomainAge(domain);
-    const icpInfo = (result.icpClaimed && !result.aiChatPage)
+    const icpInfo = (result.icpClaimed && !(result.aiChatPage || result.ugcPage))
       ? await queryIcpRecord(domain)
       : skipIcpQueryResult();
 
@@ -905,12 +906,14 @@ function applyBrandCheck(result, url) {
   // 平台页面对品牌的提及是文档/讨论语境，搜索结果页标题必然包含用户
   // 查询的品牌词，均为"提及"而非"冒充"，整体跳过补检。
   // v2.3.0：可信 AI 对话页同列豁免——对话正文/标题高频出现任意品牌词
-  //（用户提问即决定），是问答语境而非冒充
+  //（用户提问即决定），是问答语境而非冒充。
+  // v2.4.0：UGC 平台同列豁免——帖子/评论/视频标题对品牌的提及
+  // 是内容语境（测评、吐槽、讨论）而非冒充，整体跳过补检
   if (DEVELOPER_PLATFORM_DOMAINS.some(function(platformDomain) {
     return hostname === platformDomain || hostname.endsWith('.' + platformDomain);
   }) || SEARCH_ENGINE_DOMAINS.some(function(searchDomain) {
     return hostname === searchDomain || hostname.endsWith('.' + searchDomain);
-  }) || isAiChatHostname(hostname)) return result;
+  }) || isAiChatHostname(hostname) || isUgcHostname(hostname)) return result;
   const title = String(result.title || '').toLowerCase().replace(/\s+/g, '');
   const brandHint = String(result.brand || '').toLowerCase().replace(/\s+/g, '');
   let matchedBrand = null;
@@ -1086,6 +1089,37 @@ const AI_CHAT_PLATFORM_DOMAINS = [
 function isAiChatHostname(hostname) {
   hostname = String(hostname || '').toLowerCase().replace(/^\.+|\.+$/g, '');
   return AI_CHAT_PLATFORM_DOMAINS.some(function(domain) {
+    return hostname === domain || hostname.endsWith('.' + domain);
+  });
+}
+
+// ===== v2.4.0：UGC 平台豁免表 =====
+// 帖子/视频标题/评论/弹幕是用户生成内容（详见 content.js 同名表注释，两处同步）。
+// 后台侧影响：applyBrandCheck 整体跳过——视频标题"火绒测评"、微博提到某
+// 品牌是内容语境不是冒充；enhanceScoreAsync 跳过 ICP API 核验——帖子里
+// 粘贴的备案号文本是内容而非页脚声明，"盗用备案"惩罚不落在平台头上。
+// 黑名单/DNR 拦截层不受影响，误加自营域无放行恶意站风险
+const UGC_PLATFORM_DOMAINS = [
+  // 视频与直播
+  'bilibili.com', 'b23.tv', 'bilibili.tv',
+  'douyin.com', 'iesdouyin.com',
+  'kuaishou.com', 'gifshow.com',
+  'douyu.com', 'huya.com',
+  'youtube.com', 'youtu.be',
+  // 社交与社区
+  'weibo.com', 'weibo.cn', 't.cn',
+  'xiaohongshu.com', 'xhslink.com',
+  'zhihu.com', 'douban.com', 'hupu.com',
+  'tieba.baidu.com', 'baijiahao.baidu.com', 'mp.weixin.qq.com',
+  // 论坛与资讯
+  'toutiao.com', 'ngabbs.com', 'bbs.nga.cn', 'nga.cn',
+  // 国际社区
+  'reddit.com', 'x.com', 'twitter.com'
+];
+
+function isUgcHostname(hostname) {
+  hostname = String(hostname || '').toLowerCase().replace(/^\.+|\.+$/g, '');
+  return UGC_PLATFORM_DOMAINS.some(function(domain) {
     return hostname === domain || hostname.endsWith('.' + domain);
   });
 }
@@ -2689,7 +2723,8 @@ async function handleAiChatLinkScan(urls, tabId) {
 
 // 消息处理中心：popup / warning / content 脚本的请求入口
 chrome.runtime.onMessage.addListener(function(msg, sender, sendResponse) {
-  // v2.3.0：AI 对话页外链核查（content.js 仅在可信 AI 对话平台发送）。
+  // v2.3.0：AI 对话页外链核查；v2.4.0 起同时覆盖 UGC 平台
+  //（content.js 在可信 AI 对话/UGC 平台顶层框架发送，后台不重复校验来源域）。
   // 静态分级即时返回；可疑模式域名的沙箱探测异步完成后一并回执
   if (msg.action === 'scanAiChatLinks') {
     handleAiChatLinkScan(msg.urls, sender.tab && sender.tab.id).then(function(results) {

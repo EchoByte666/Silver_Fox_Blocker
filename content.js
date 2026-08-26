@@ -154,6 +154,46 @@ function isAiChatHostname(hostname) {
   });
 }
 
+// ===== v2.4.0：UGC 平台豁免表 =====
+// 帖子/视频标题/评论/弹幕是用户生成内容（UGC），与 AI 对话页同理：
+//   1) 跳过品牌匹配——视频标题"火绒测评"、微博提到某品牌是内容语境不是冒充
+//   2) 不加"大量表情符号"分——弹幕/评论/动态天然高频使用表情符号
+//   3) 不加"官方/安全/正版三类话术"分——帖子正文出现这些词是普通表达
+//   4) ICP 备案三通道整体跳过——帖子里粘贴任意备案号文本都是内容，
+//      "盗用备案"惩罚不能落在平台头上；平台页脚自有合规备案无需 API 核验
+// 与 AI 对话的差异（UGC 特性适配）：
+//   - 外链核查单批上限更高（15→30）：评论区/简介区外链密度远大于对话输出，
+//     且评论区是银狐投毒的主投放渠道（伪装破解/补丁/网盘链接），核查更重要；
+//   - 收录平台自营短链域（t.cn / b23.tv / xhslink.com）——沙箱探测会跟随
+//     重定向核对最终落地域，短链跳转钓鱼恰好是该通道的核心抓捕形态。
+// 注意：background.js 中有相同列表（applyBrandCheck 用），修改时需两处同步；
+// 新增条目须为 UGC 平台方自营域名（豁免只影响文本评分层，
+// 黑名单/DNR 拦截层不受影响，误加自营域无放行恶意站风险）
+const UGC_PLATFORM_DOMAINS = [
+  // 视频与直播
+  'bilibili.com', 'b23.tv', 'bilibili.tv',
+  'douyin.com', 'iesdouyin.com',
+  'kuaishou.com', 'gifshow.com',
+  'douyu.com', 'huya.com',
+  'youtube.com', 'youtu.be',
+  // 社交与社区
+  'weibo.com', 'weibo.cn', 't.cn',
+  'xiaohongshu.com', 'xhslink.com',
+  'zhihu.com', 'douban.com', 'hupu.com',
+  'tieba.baidu.com', 'baijiahao.baidu.com', 'mp.weixin.qq.com',
+  // 论坛与资讯
+  'toutiao.com', 'ngabbs.com', 'bbs.nga.cn', 'nga.cn',
+  // 国际社区
+  'reddit.com', 'x.com', 'twitter.com'
+];
+
+function isUgcHostname(hostname) {
+  hostname = String(hostname || '').toLowerCase().replace(/^\.+|\.+$/g, '');
+  return UGC_PLATFORM_DOMAINS.some(function(domain) {
+    return hostname === domain || hostname.endsWith('.' + domain);
+  });
+}
+
 // ===== v2.1.0：官方标识检测（降误报核心）=====
 // 检测页面是否挂有"党政机关/事业单位"官方标识——此类标识由机构申请并
 // 挂载在页脚（典型形态见 CONAC 全国党政机关事业单位互联网网站标识：
@@ -1681,9 +1721,13 @@ function readCachedRules() {
     add('patternDomain', '连字符 com.cn/hl.cn/cc 域名', 15, patternDomain, patternDomain ? host : '', 'domain');
 
     // v2.3.0：可信 AI 对话平台识别（豁免表见文件顶部 AI_CHAT_PLATFORM_DOMAINS）。
-    // 影响范围：manyEmoji / ICP 三通道（下方）/ 品牌匹配（brand 区段）；
+    // v2.4.0：UGC 平台（bilibili/weibo 等帖子·评论·弹幕语料）同列豁免，
+    // 合并为 isTrustedContentPlatform 统一门控。
+    // 影响范围：manyEmoji / officialSpeech / ICP 三通道（下方）/ 品牌匹配；
     // 黑名单与强特征（noah/adseo）检测不受影响
     var isAiChatPage = isAiChatHostname(host);
+    var isUgcPage = isUgcHostname(host);
+    var isTrustedContentPlatform = isAiChatPage || isUgcPage;
 
     // ---- 话术类指标 ----
     // "官方/安全/正版"三类话术齐备。
@@ -1691,9 +1735,10 @@ function readCachedRules() {
     // 三词齐备只能说明"像官网"，不能说明"假官网"
     // v2.3.0a：AI 对话页豁免——这三个词是用户提问与模型输出里的普通词汇
     //（"这是正版官网，安全下载"是对话常态），在 AIGC/UGC 语料下不构成证据
+    // v2.4.0：UGC 平台同列豁免——帖子正文/评论出现这些词同样是普通表达
     var speechKinds = ['官方', '安全', '正版'].filter(function(word) { return analysisText.includes(word); });
     add('officialSpeech', '官方、安全、正版三类话术', 15,
-      !isAiChatPage && !softwareCatalog && speechKinds.length >= 3, speechKinds.join('、'), 'speech');
+      !isTrustedContentPlatform && !softwareCatalog && speechKinds.length >= 3, speechKinds.join('、'), 'speech');
 
     // noah 系域名的 /api.php（银狐木马通信特征，+100 强特征：
     // 特异性极高，单项命中即可硬拦截，不受证据多样性约束）
@@ -1856,7 +1901,7 @@ function readCachedRules() {
     var isSearchEngine = SEARCH_ENGINE_DOMAINS.some(function(searchDomain) {
       return host === searchDomain || host.endsWith('.' + searchDomain);
     });
-    var matchedBrandRule = (isDeveloperPlatform || isSearchEngine || isAiChatPage) ? null : brandConfig.find(function(rule) {
+    var matchedBrandRule = (isDeveloperPlatform || isSearchEngine || isTrustedContentPlatform) ? null : brandConfig.find(function(rule) {
       return matchesBrand(rule, combinedBrandText, combinedRawBrandText);
     });
     // 命中档位：3=页面标题 / 2=h1 主标题 / 1=仅 SEO 元数据
@@ -2244,7 +2289,7 @@ function readCachedRules() {
     // v2.3.0：AI 对话页豁免——AI 回复天然高频使用表情符号，此指标在对话页失真
     var emojiCount = 0;
     try { emojiCount = (text.match(/\p{Extended_Pictographic}/gu) || []).length; } catch(e) { /* */ }
-    add('manyEmoji', '大量表情符号', 20, !isAiChatPage && emojiCount >= 6, emojiCount + ' 个', 'structure');
+    add('manyEmoji', '大量表情符号', 20, !isTrustedContentPlatform && emojiCount >= 6, emojiCount + ' 个', 'structure');
 
     // 大量内嵌 CSS 及注释（AI 生成模板痕迹，+10）
     var inlineCss = Array.from(document.querySelectorAll('style')).map(function(el) { return el.textContent || ''; }).join('\n');
@@ -2281,9 +2326,10 @@ function readCachedRules() {
     };
     // v2.3.0：AI 对话页 ICP 豁免——对话内容（AIGC/UGC）可能包含用户粘贴的
     // 任意备案号文本，页面脚注备案属于平台而非对话内容，三通道整体跳过；
-    // icpClaimed 恒为 false → 后台跳过 ICP API 核验，
-    // "声明备案但查无记录"的盗用备案 +20/+30 惩罚不会落在 AI 平台头上
-    if (!isAiChatPage) {
+    // icpClaimed 恒为 false → 后台跳过 ICP API 核验，"声明备案但查无记录"
+    // 的盗用备案 +20/+30 惩罚不会落在平台头上。
+    // v2.4.0：UGC 平台同列豁免——帖子里粘贴的备案号同样是内容而非页脚声明
+    if (!isTrustedContentPlatform) {
       // 通道一（高可信）：指向工信部备案系统的链接文本中提取合规备案号
       try {
         var beianLinks = document.querySelectorAll('a[href*="beian.miit.gov.cn"], a[href*="beian.miit.gov"]');
@@ -2348,6 +2394,8 @@ function readCachedRules() {
       // v2.3.0：可信 AI 对话页标记——后台据此跳过品牌补检与 ICP API 核验，
       // 并激活外链核查通道（见 background scanAiChatLinks）
       aiChatPage: isAiChatPage,
+      // v2.4.0：UGC 平台标记——后台 enhanceScoreAsync 据此跳过 ICP API 核验
+      ugcPage: isUgcPage,
       // v2.2.0：页面声明的合规备案号原文——供后台与 API 备案记录做
       // 一致性比对（一致 -80 / 不符 +30，见 enhanceScoreAsync 三态核验）
       icpNumber: icpLinkedMatch || icpTextMatch || '',
@@ -2509,22 +2557,28 @@ function readCachedRules() {
   window.addEventListener('load', scheduleEvaluate, { once: true });
 
   // ===== v2.3.0：AI 对话页外链风险标注 =====
-  // 仅在可信 AI 对话平台的顶层框架激活。对话中的链接是 AIGC 输出，
-  // 可能是幻觉域名、钓鱼仿冒站或被入侵站点——对每条跨站外链请求后台
-  // 核查（黑名单/白名单/可疑模式），连字符可疑模式域名再由后台以
-  // "沙箱防追踪"方式探测（无 Cookie、无 Referer、不读响应体、8 秒超时），
-  // 结果以微型徽标标注在链接旁。
+  // v2.4.0 起同时覆盖 UGC 平台（bilibili/weibo 等）顶层框架。
+  // AI 对话中的链接是 AIGC 输出（幻觉域名/仿冒站）；UGC 平台的评论区·
+  // 简介·动态外链是用户投放——评论区正是银狐投毒的主渠道（伪装破解/
+  // 补丁/网盘链接），核查同样必要甚至更重要。对每条跨站外链请求后台
+  // 核查（黑名单/白名单/可疑模式），可疑模式域名再由后台以"沙箱防追踪"
+  // 方式探测（无 Cookie、无 Referer、不读响应体、8 秒超时），
+  // 结果以微型徽标标注在链接旁；平台自营短链域（t.cn/b23.tv 等）
+  // 探测时跟随重定向核对最终落地域，短链跳转钓鱼即在此环节现形。
   // 体验约束：16px 高内联徽标不改变布局流；safe/unknown 仅显示色点；
   // 不拦截点击、不修改链接本身；流式输出增量渲染时经 WeakMap 去重，
   // 只处理新增/地址变更的锚点。
   // scheduleLinkScan 由上方 MutationObserver 回调调用（函数声明提升，先调后定义安全）
-  var aiChatActive = (window.top === window) && isAiChatHostname(location.hostname);
+  var aiChatActive = (window.top === window) &&
+    (isAiChatHostname(location.hostname) || isUgcHostname(location.hostname));
   var linkScanTimer = null;
   var processedAnchors = typeof WeakMap !== 'undefined' ? new WeakMap() : null;
   // v2.3.4：url → 锚点注册表——后台 ICP 核验完成后经 aiLinkVerdict 消息
   // 推送终局结论，据此找到原锚点原位刷新徽标（超容量整体清空防泄漏）
   var aiChatAnchorByUrl = typeof Map !== 'undefined' ? new Map() : null;
-  var LINK_SCAN_MAX_PER_BATCH = 15;
+  // v2.4.0：UGC 平台评论区外链密度高且是投毒主渠道，单批上限放宽到 30；
+  // AI 对话页维持 15
+  var LINK_SCAN_MAX_PER_BATCH = isUgcHostname(location.hostname) ? 30 : 15;
 
   function scheduleLinkScan() {
     if (!aiChatActive || !processedAnchors) return;

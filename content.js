@@ -1569,6 +1569,15 @@ function readCachedRules() {
   let blockedDomains = current.domains;
   let cloudWhitelist = current.cloudWhitelist;
 
+  // v2.6.1：localStorage 写入失败分级告警。沙箱文档（无 allow-same-origin
+  // 的 iframe——DeepSeek 等站点把应用嵌在 sandbox iframe 里，本扩展
+  // all_frames:true 会进入其中）访问 localStorage 必然抛 SecurityError，
+  // 这是预期降级路径而非故障：该缓存只服务本帧首屏黑名单快筛
+  //（readCachedRules），不可用时自动落回硬编码兜底 + 后台二次确认，
+  // 无任何功能影响。首次失败降级为 debug（生产环境静默），不再用
+  // console.warn 刷 chrome://extensions 错误面板；其余异常（配额满等
+  // 真实故障）保留告警，同样只报一次防刷屏
+  let lsWriteWarned = false;
   function syncToLocal() {
     try {
       localStorage.setItem('__yh_data', JSON.stringify({
@@ -1578,7 +1587,13 @@ function readCachedRules() {
       }));
       debug('content.js localStorage 已更新: ' + blockedDomains.length + ' 个域名');
     } catch(e) {
-      console.warn(LOG_PREFIX + 'content.js localStorage 写入失败: ' + e.message);
+      const msg = String((e && e.message) || e || '');
+      const sandboxed = (e && e.name === 'SecurityError') || /sandbox/i.test(msg);
+      if (!lsWriteWarned) {
+        lsWriteWarned = true;
+        if (sandboxed) debug('content.js localStorage 不可用（沙箱文档），黑名单缓存写入按预期跳过: ' + msg);
+        else console.warn(LOG_PREFIX + 'content.js localStorage 写入失败（仅提示一次）: ' + msg);
+      }
     }
   }
 

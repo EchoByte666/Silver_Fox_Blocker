@@ -705,6 +705,14 @@ document.addEventListener('DOMContentLoaded', function() {
   // 主题切换（v2.0.0）
   el = $('themeToggle');
   if (el) el.addEventListener('click', toggleTheme);
+  // 设置面板切换
+  el = $('settingsBtn');
+  if (el) {
+    el.addEventListener('click', function() {
+      const panel = $('settingsPanel');
+      if (panel) panel.open = !panel.open;
+    });
+  }
   // 重新评分（v2.0.0）：向当前页 content script 重新查询评分
   el = $('rescoreBtn');
   if (el) el.addEventListener('click', loadCurrentScore);

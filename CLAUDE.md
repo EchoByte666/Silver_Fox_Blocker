@@ -28,16 +28,18 @@ Chrome/Edge MV3 浏览器扩展：拦截"银狐"木马钓鱼/仿冒网站。
 | brands.json | 内置品牌库（品牌冒充检测用） |
 | default_rules.txt | 内置默认黑名单兜底 |
 
+## 模块化结构（v2.7.0）
+
+- `modules/core.js`：**单一事实来源（SSOT）**——日志（DEBUG/LOG/LOG_PREFIX/debug）、HARDCODED_DOMAINS、RULE_SOURCE_URLS、CLOUD_WHITELIST_URL、BRAND_SOURCE_URL、DEFAULT_WHITELIST、FETCH_TIMEOUT_MS、OFFSCREEN_WAIT_MS、matchesPatternDomain/matchesDomainList/matchesBlockedDomain、getRegistrableDomain/isSameSiteHost、isGovCnHostname（统一含 gov.hk/政务.cn 扩展后缀，content 首屏快筛语义随之加宽至与后台一致）、levenshteinWithin1、isShortLatinKeyword/shortKeywordBoundaryHit/brandDomainKeywordHit、五张平台豁免表（DEVELOPER/SEARCH_ENGINE/AI_CHAT/UGC/SECURITY_FORUM）与 isAiChatHostname/isUgcHostname/isSecurityForumHostname。改配置或这些函数只改此文件。加载方式：manifest content_scripts js 数组首位 + background.js 顶部 importScripts 首位；文件内禁止 import/export 与触碰 chrome.*/DOM（经典脚本两栖环境）；命名空间 `globalThis.__YH_CORE__`，消费方解构
+- `modules/sandbox-probe.js`：AI 外链沙箱防追踪探测独立模块（sandboxProbeUrl/doSandboxProbe + 注册域级缓存/并发去重/8s 超时；PROBE_CACHE_TTL_MS/PROBE_CACHE_MAX/AI_LINK_PROBE_TIMEOUT_MS 模块自持）；依赖 core.js 先加载；命名空间 `globalThis.__YH_SANDBOX__`
+- 平台豁免语义速查：AI_CHAT/UGC/SECURITY_FORUM 三表=跳过品牌匹配 + manyEmoji/officialSpeech 不加分 + ICP 三通道与后台 API 核验全跳过（黑名单/DNR 拦截层不受影响）；UGC 另激活外链核查通道且单批 30（AI 对话 15）；论坛不激活外链核查，特有=提示卡片 + 未加白站外链接拦截（content.js 末尾模块）
+- 仍存在的重复副本（二期收敛目标）：popup.js 与 offscreen.js 的 `RULE_SOURCE_URLS`、popup.js 的 `BUILT_IN_WHITELIST`
+- 二期路线：manifest background 加 `"type": "module"` 升级 ES modules（切换前需全量排查隐式全局赋值）；随后继续拆分 background.js（rdap/icp 域名情报、ai-link 分类与 verdict 缓存、user-trust 信任记忆、dnr 规则、消息路由）与 content.js（评分引擎/冻结/外链核查/论坛防护等功能域）
+
 ## 修改时必须同步的多处代码
 
-- `HARDCODED_DOMAINS`：background.js 与 content.js 两处
-- `RULE_SOURCE_URLS`：background.js / offscreen.js / popup.js 三处
-- 默认白名单：background.js `DEFAULT_WHITELIST` 与 popup.js `BUILT_IN_WHITELIST`
-- `AI_CHAT_PLATFORM_DOMAINS` / `isAiChatHostname`（v2.3.0 可信 AI 对话平台豁免）：background.js 与 content.js 各一份，修改需两处同步；豁免语义=跳过品牌匹配 + manyEmoji/officialSpeech 不加分 + ICP 三通道与后台 API 核验全跳过，黑名单/DNR 层不受影响
-- `UGC_PLATFORM_DOMAINS` / `isUgcHostname`（v2.4.0 UGC 平台豁免，bilibili/weibo 等 29 个自营域含 t.cn/b23.tv 短链）：background.js 与 content.js 各一份需两处同步；豁免语义与 AI 对话相同（品牌/表情/话术/ICP 四类文本启发式全跳过），另激活外链核查通道且单批上限 30（AI 对话为 15）——评论区是银狐投毒主渠道，核查不可关
-- `SECURITY_FORUM_DOMAINS` / `isSecurityForumHostname`（v2.5.0 安全研究论坛，kafan/pediy/kanxue/52pojie/t00ls 六域）：background.js 与 content.js 各一份需两处同步；文本启发式豁免与 UGC 相同但**不激活**外链徽标通道；特有=进入即注入提示卡片（一键加白写 storage.local whitelist 键）+ 未加白时捕获阶段拦截跨站外链弹确认窗（支持仅本次访问），模块在 content.js IIFE 末尾
-- `matchesPatternDomain` / `isGovCn` / `levenshteinWithin1` 等工具函数在 background.js 与 content.js 各有一份，语义需保持一致
-- `isShortLatinKeyword` / `shortKeywordBoundaryHit` / `brandDomainKeywordHit`（v2.3.9 短词强边界防子串碰撞，cline.bot 误判 LINE 的修复）：background.js 与 content.js 各一份需同步；语义=短拉丁关键词（<5 字符，如远程库 LINE 的 "line"）在域名上仅认注册段整段/连字符·下划线·数字切分段匹配、在文本上仅认词边界命中；≥5 字符长词保持宽松子串口径不变
+- `RULE_SOURCE_URLS`：offscreen.js / popup.js 各有一份副本（权威源=modules/core.js）
+- 默认白名单：popup.js `BUILT_IN_WHITELIST`（权威源=modules/core.js `DEFAULT_WHITELIST`）
 - `uiLevelOf`（UI 层级判定 warn/notice/card/clear）：background.js 同步决策与 enhanceScoreAsync 对账共用同一规则，修改阈值时两处及 content.js 展示层同步
 - UI 层级切换统一走 content.js `applyScoreVerdict()`：同步回执与异步对账（scoreAdjusted）共用，新增层级相关逻辑时勿在分支里单独注入/移除 UI；同步回执必须携带 `effectiveTotal`（后台实际判定分），否则状态记录不一致会导致去重失效
 - Toast 触发语义（v2.2.5）：仅在**拦截方式**（UI 层级 blocked/warn/notice/card/clear）实际切换且非首次应用时弹出，同方式内分数波动与卡片增减一律静默；15 秒防抖冷却抑制阈值抖动反复弹（scoreEscalated 硬拦截升级豁免冷却）

@@ -705,9 +705,9 @@ document.addEventListener('DOMContentLoaded', function() {
   // 主题切换（v2.0.0）
   el = $('themeToggle');
   if (el) el.addEventListener('click', toggleTheme);
-  // 设置按钮：打开 options 页面
+  // 设置按钮：在新标签页打开 options 页面
   el = $('settingsBtn');
-  if (el) el.addEventListener('click', function() { chrome.runtime.openOptionsPage(); });
+  if (el) el.addEventListener('click', function() { chrome.tabs.create({ url: 'options/options.html' }); });
   // 重新评分（v2.0.0）：向当前页 content script 重新查询评分
   el = $('rescoreBtn');
   if (el) el.addEventListener('click', loadCurrentScore);

@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>银狐拦截系统 - 设置</title>
+<link rel="stylesheet" href="options.css">
+</head>
+<body>
+<div id="app">
+  <aside id="sidebar">
+    <div class="sidebar-header">
+      <div class="brand">银狐拦截系统</div>
+      <div class="brand-sub">设置</div>
+    </div>
+    <nav id="sidebar-nav">
+      <a class="nav-item active" data-section="general">常规</a>
+      <a class="nav-item" data-section="download">下载保护</a>
+      <a class="nav-item" data-section="script">脚本拦截</a>
+      <a class="nav-item" data-section="privacy">定位与防追踪</a>
+      <a class="nav-item" data-section="about">关于</a>
+    </nav>
+  </aside>
+
+  <main id="content">
+    <div id="section-container">
+      <!-- JS 渲染 -->
+    </div>
+    <div id="actions-bar">
+      <button id="export-btn" class="btn" title="导出设置到 JSON">导出设置</button>
+      <button id="reset-btn" class="btn btn-danger" title="恢复所有设置为默认值">恢复默认</button>
+    </div>
+  </main>
+
+  <div id="toast-container"></div>
+</div>
+<script src="options.js"></script>
+</body>
+</html>

@@ -1709,6 +1709,8 @@ function readCachedRules() {
     // 硬拦截要求命中 ≥2 个类别：正规站的风险特征往往集中在单一类别
     // （如纯文案话术或纯 SEO 结构），单类别堆分不足以定性为恶意
     var matchedCategories = Object.create(null);
+    // v2.6.0：各类别正分累计器——话术类证据封顶计算用（见下方 speechCap）
+    var categoryPositivePts = Object.create(null);
 
     // 评分项累加器：命中加分并记录明细（供弹窗/警告页逐项展示）。
     // v2.1.2：新增 category 参数——命中的正分项同时登记证据类别；
@@ -1717,7 +1719,10 @@ function readCachedRules() {
       details.push({ id: id, label: label, points: matched ? points : 0, matched: matched, evidence: evidence || '' });
       if (matched) {
         total += points;
-        if (category && points > 0) matchedCategories[category] = true;
+        if (category && points > 0) {
+          matchedCategories[category] = true;
+          categoryPositivePts[category] = (categoryPositivePts[category] || 0) + points;
+        }
       }
     }
 
@@ -1763,9 +1768,34 @@ function readCachedRules() {
     // v2.3.0a：AI 对话页豁免——这三个词是用户提问与模型输出里的普通词汇
     //（"这是正版官网，安全下载"是对话常态），在 AIGC/UGC 语料下不构成证据
     // v2.4.0：UGC 平台同列豁免——帖子正文/评论出现这些词同样是普通表达
-    var speechKinds = ['官方', '安全', '正版'].filter(function(word) { return analysisText.includes(word); });
+    // 否定语境计数："非官方网站"、"并不安全"、"与正版无关"这类表述是对话术
+    // 的反驳而非使用，直接 includes 会把评测文章、粉丝站声明、对比测评全部误计。
+    // v2.6.0：前缀否定（非/并非/不/没(有)/无 + 可选助词 是/所谓/会/能/要）
+    // 与后缀否定（X+无关）两种构造都剔除，全部被否定的词不再参与判定。
+    // "不保证安全"这类词距较远的否定刻意不处理——防把正面承诺误剔，
+    // 且该指标本身还有下载语境与次数门槛兜底
+    function unnegatedCount(haystack, word) {
+      var totalHits = haystack.split(word).length - 1;
+      if (!totalHits) return 0;
+      var negated = 0;
+      try {
+        var pre = new RegExp('(?:非|并非|不|没有|没|无)(?:是|所谓|会|能|要)?\\s*' + word, 'g');
+        negated += (haystack.match(pre) || []).length;
+        var post = new RegExp(word + '\\s*无关', 'g');
+        negated += (haystack.match(post) || []).length;
+      } catch(e) { return totalHits; }
+      return Math.max(0, totalHits - negated);
+    }
+    var speechCounts = ['官方', '安全', '正版'].map(function(word) {
+      return { word: word, count: unnegatedCount(analysisText, word) };
+    });
+    var speechKinds = speechCounts.filter(function(item) { return item.count > 0; })
+      .map(function(item) { return item.word; });
     add('officialSpeech', '官方、安全、正版三类话术', 15,
-      !isTrustedContentPlatform && !softwareCatalog && speechKinds.length >= 3, speechKinds.join('、'), 'speech');
+      !isTrustedContentPlatform && !softwareCatalog && speechKinds.length >= 3,
+      speechCounts.filter(function(item) { return item.count > 0; })
+        .map(function(item) { return item.word + '×' + item.count; }).join('、'),
+      'speech');
 
     // noah 系域名的 /api.php（银狐木马通信特征，+100 强特征：
     // 特异性极高，单项命中即可硬拦截，不受证据多样性约束）
@@ -2312,11 +2342,21 @@ function readCachedRules() {
     add('safetyClaims', '密集安全承诺', 15,
       !softwareCatalog && softwareDownloadContext && safetyCount >= 10, safetyCount + ' 次', 'speech');
 
-    // 大量表情符号（≥6 个，低质模板站特征，+20）
+    // 大量表情符号（低质模板站特征，+20）。
+    // v2.6.0 语料收紧：只统计**作者语料**（<title> / <h1> / meta 描述关键词）里的
+    // 表情——评论区、留言板、UGC 区块的表情是访客行为不是站点特征，旧版对
+    // 整页 visibleText 计数导致带热评的文章页误报；阈值 6→5（语料变短）。
+    // 类别从 structure 迁移到 speech：表情堆砌本质是文案观感信号，归入
+    // structure 曾使"纯文案模板站"凑出 hasHardEvidence（冻结门槛）与
+    // 多类别硬拦截，是冻结误报的隐性来源之一
     // v2.3.0：AI 对话页豁免——AI 回复天然高频使用表情符号，此指标在对话页失真
+    var authorEmojiText = [document.title,
+      primaryHeading ? (primaryHeading.innerText || '') : '', metaText].join(' ');
     var emojiCount = 0;
-    try { emojiCount = (text.match(/\p{Extended_Pictographic}/gu) || []).length; } catch(e) { /* */ }
-    add('manyEmoji', '大量表情符号', 20, !isTrustedContentPlatform && emojiCount >= 6, emojiCount + ' 个', 'structure');
+    try { emojiCount = (authorEmojiText.match(/\p{Extended_Pictographic}/gu) || []).length; } catch(e) { /* */ }
+    add('manyEmoji', '大量表情符号', 20,
+      !isTrustedContentPlatform && emojiCount >= 5,
+      emojiCount + ' 个（标题/主标题/描述语料）', 'speech');
 
     // 大量内嵌 CSS 及注释（AI 生成模板痕迹，+10）
     var inlineCss = Array.from(document.querySelectorAll('style')).map(function(el) { return el.textContent || ''; }).join('\n');
@@ -2395,6 +2435,23 @@ function readCachedRules() {
     //     - domainBrandImpersonation（域名含品牌词）：保留 +30 计分，参与综合裁决；
     //     - hasSdk && brandMatch && 有下载入口的模板指纹组合：改为显式计分项
     //       templateFingerprint（+40，structure 类），见下方 add()。
+    // v2.6.0 纯话术类证据封顶：speech 类（官方/安全/正版话术、密集安全承诺、
+    // 表情符号）全部命中也只有 50 分，却能靠叠加把正规站推上 notice/card 层。
+    // 文案观感永远不该单独构成拦截理由——超过上限的部分不再计入总分并
+    // 明示抵扣明细；结构/资源/域名/品牌类正分不受影响
+    var SPEECH_CAP_PTS = 25;
+    var speechPts = categoryPositivePts.speech || 0;
+    if (speechPts > SPEECH_CAP_PTS) {
+      var speechOverflow = speechPts - SPEECH_CAP_PTS;
+      total -= speechOverflow;
+      details.push({ id: 'speechCap', label: '话术类证据封顶', points: -speechOverflow,
+        matched: true,
+        evidence: '官方/安全/正版话术、表情符号等纯文案特征合计 ' + speechPts +
+          ' 分，超出上限部分不计入总分（防单类文案堆分误报）' });
+      debug('scorePage 话术封顶：' + speechPts + '→' + SPEECH_CAP_PTS +
+        '（抵扣 ' + speechOverflow + '）');
+    }
+
     var categoryCount = Object.keys(matchedCategories).length;
     var strongSignal = hasNoahApi || !!adseoResource;
 
@@ -2426,6 +2483,9 @@ function readCachedRules() {
       // v2.5.0：安全研究论坛标记——同列 ICP 豁免；前台另注入提示卡片
       // 并拦截未加白状态的站外链接（见文件末尾安全论坛模块）
       secForum: isSecForumPage,
+      // v2.6.0：连字符模式域名命中标记——后台异步反查 ICP 备案做信任校平
+      // （持有有效备案 -20 / 明确查无 +8，见 background enhanceScoreAsync）
+      patternDomainHit: !!patternDomain,
       // v2.2.0：页面声明的合规备案号原文——供后台与 API 备案记录做
       // 一致性比对（一致 -80 / 不符 +30，见 enhanceScoreAsync 三态核验）
       icpNumber: icpLinkedMatch || icpTextMatch || '',

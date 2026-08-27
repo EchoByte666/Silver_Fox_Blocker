@@ -620,6 +620,11 @@ const AGE_MATURE_BONUS = -15;
 const ICP_MATCH_BONUS = -80;   // 备案号核验一致 → 大幅减分
 const ICP_STOLEN_PENALTY = 30; // 域名已备案但页面号码对不上 → 盗用他人备案号
 
+// v2.6.0：连字符模式域名（*.com.cn/*.hl.cn/*.cc）的异步 ICP 校平系数——
+// 形态弱信号静态层固定 +15，异步反查后按实际备案状态双向修正（见 enhanceScoreAsync）
+const PATTERN_DOMAIN_ICP_BONUS = -20;   // 域名实际持有有效备案 → 抵扣
+const PATTERN_DOMAIN_NOICP_PENALTY = 8; // API 明确查无备案 → 疑点印证温和加权
+
 // 备案号一致性比对：工信部格式为「主体备案号」+ 可选「-N 网站序号」——
 // 沪ICP备18008322号（主体号）与 沪ICP备18008322号-1（该主体的第 1 个网站）
 // 是同一主体；页面页脚常声明主体号，API 返回带序号的网站号。
@@ -686,6 +691,8 @@ async function enhanceScoreAsync(tabId, url, result) {
   const key = tabId + ':' + url;
   if (_enhanceInFlight.has(key)) return;
   _enhanceInFlight.add(key);
+  // v2.6.0：先确保用户信任表就绪（isUserTrustedActive 为同步读）
+  await ensureUserTrustLoaded();
   try {
     let hostname = '';
     try { hostname = new URL(url).hostname.toLowerCase(); } catch(e) { return; }
@@ -729,6 +736,35 @@ async function enhanceScoreAsync(tabId, url, result) {
       enhancedTotal += AGE_MATURE_BONUS;
       details.push({ id: 'domainMature', label: '老域名安全信号', points: AGE_MATURE_BONUS,
         matched: true, evidence: '注册 ' + days + ' 天（' + ageSourceLabel + '）' });
+    }
+
+    // v2.6.0 增强：连字符模式域名的备案反查校平。*.com.cn/*.hl.cn/*.cc
+    // 连字符形态正规企业同样在用（跨国品牌中英拼接名等），同步静态分固定
+    // +15 属"宁枉勿纵"。此处异步反查按事实修正：
+    //   实际持有有效 ICP 备案 → PATTERN_DOMAIN_ICP_BONUS -20（主体真实运营）；
+    //   API 明确查无备案     → +8（形态疑点获得独立印证，温和加权）；
+    //   API 全部不可用       → 不动分值（失败安全，与三态核验同一哲学）。
+    // 仅在页面未声明备案号时执行——声明场景走下方三态核验（一致-80/盗用+30），
+    // 避免同域两套口径叠加；可信内容平台整体跳过
+    if (result.patternDomainHit && !result.icpClaimed &&
+        !(result.aiChatPage || result.ugcPage || result.secForum)) {
+      const patIcpInfo = await queryIcpRecord(domain);
+      if (patIcpInfo && patIcpInfo.queried) {
+        if (patIcpInfo.hasIcp) {
+          enhancedTotal += PATTERN_DOMAIN_ICP_BONUS;
+          details.push({ id: 'patternDomainIcpOk', label: '连字符域名持有有效备案',
+            points: PATTERN_DOMAIN_ICP_BONUS, matched: true,
+            evidence: domain + ' 已在工信部备案' +
+              (patIcpInfo.icpNumber ? '（' + patIcpInfo.icpNumber + '）' : '') +
+              '，主体真实存在（API 核验），形态疑点校平' });
+        } else {
+          enhancedTotal += PATTERN_DOMAIN_NOICP_PENALTY;
+          catSet.add('domain');
+          details.push({ id: 'patternDomainNoIcp', label: '连字符域名查无备案',
+            points: PATTERN_DOMAIN_NOICP_PENALTY, matched: true,
+            evidence: domain + ' 无任何 ICP 备案记录（API 核验），形态疑点加重' });
+        }
+      }
     }
 
     // v2.2.0 增强：ICP 备案三态核验（structure 类证据）。
@@ -814,8 +850,10 @@ async function enhanceScoreAsync(tabId, url, result) {
             details: details.filter(function(item) { return item.matched; }),
             categoriesList: enhancedCatList,
             // 目标为警示层时附带冻结指令（门槛与同步路径一致：
-            // structure/resource 类证据 + 不在解冻窗口期内）
-            freeze: enhancedLevel === 'warn' && hardEvidence && !isRecentlyUnfrozen(url),
+            // structure/resource 类证据 + 不在解冻窗口期/用户信任期内——
+            // v2.6.0 信任记忆与同步路径同门槛，两处同步）
+            freeze: enhancedLevel === 'warn' && hardEvidence &&
+              !isRecentlyUnfrozen(url) && !isUserTrustedActive(hostname),
             // 卡片跟随规则与同步路径一致：card 层必有；notice/warn 层仅
             // 纯高分达硬拦截线时叠加（legacyHit/strongSignal 在本路径恒 false）
             card: enhancedLevel === 'card' ||
@@ -1428,11 +1466,16 @@ function isRecentlyBypassed(url) {
 // 窗口期有界：到期后同站再次评分达到软拦截线会重新冻结（安全兜底）
 const UNFROZEN_WINDOW_MS = 30 * 60 * 1000; // 解冻窗口期：30 分钟
 
-// 登记解冻窗口期（markUnfrozen 消息入口调用）
+// 登记解冻窗口期（markUnfrozen 消息入口调用）。
+// v2.6.0：解冻确认同时写入用户信任记忆（host 级、7 天持久化）——用户看过
+// 横幅并主动解除限制，是人工核验过的放行信号，不应随 SW 回收遗忘
 function markUnfrozen(url) {
   try {
     const hostname = new URL(url).hostname.toLowerCase();
-    if (hostname) cache.unfrozen[hostname] = Date.now();
+    if (hostname) {
+      cache.unfrozen[hostname] = Date.now();
+      markUserTrusted(hostname);
+    }
   } catch(e) { /* 非法 URL：忽略 */ }
 }
 
@@ -1442,6 +1485,101 @@ function isRecentlyUnfrozen(url) {
     const hostname = new URL(url).hostname.toLowerCase();
     return !!(hostname && cache.unfrozen[hostname] &&
       Date.now() - cache.unfrozen[hostname] < UNFROZEN_WINDOW_MS);
+  } catch(e) { return false; }
+}
+
+// ===== v2.6.0 用户信任记忆（host 级人工放行信号，storage.local 持久化） =====
+// 消费点有两处（语义保持一致）：
+//   1. scorePage 同步决策：评分抵扣 USER_TRUST_DISCOUNT 分 + 软拦截不冻结；
+//   2. enhanceScoreAsync 对账：警示层冻结指令对信任 host 关闭。
+// 防滥用边界：黑名单命中 / noah/adseo 强特征 / DNR 拦截层完全不读取信任表，
+// 白名单仍是唯一全量放行通道；7 天自动过期防陈旧误信
+const USER_TRUST_STORAGE_KEY = 'yhUserTrustMap';
+const USER_TRUST_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const USER_TRUST_MAX_ENTRIES = 500;
+const USER_TRUST_DISCOUNT = 20;
+
+let _userTrustMap = null;        // hostname → 登记时间戳（惰性加载）
+let _userTrustSaveTimer = null;  // 写入防抖句柄
+
+// 惰性加载信任表：SW 每次唤醒后首次访问时从 storage.local 灌回，
+// 过期条目在加载阶段即丢弃；读取失败安全降级为空表（仅失去抵扣，无副作用）
+function ensureUserTrustLoaded() {
+  if (_userTrustMap) return Promise.resolve(_userTrustMap);
+  return new Promise(function(resolve) {
+    let settled = false;
+    const finish = function(map) {
+      if (!settled) { settled = true; _userTrustMap = map; resolve(map); }
+    };
+    try {
+      chrome.storage.local.get(USER_TRUST_STORAGE_KEY, function(data) {
+        const map = new Map();
+        try {
+          const raw = data && data[USER_TRUST_STORAGE_KEY];
+          if (raw && typeof raw === 'object') {
+            for (const host of Object.keys(raw)) {
+              const ts = Number(raw[host]);
+              if (host && ts > 0 && Date.now() - ts < USER_TRUST_TTL_MS) map.set(host, ts);
+            }
+          }
+        } catch(e) { /* 记录损坏视为空表 */ }
+        finish(map);
+      });
+    } catch(e) { finish(new Map()); }
+  });
+}
+
+// 防抖合并写回（一批决策只落盘一次）
+function persistUserTrustSoon() {
+  if (_userTrustSaveTimer) return;
+  _userTrustSaveTimer = setTimeout(function() {
+    _userTrustSaveTimer = null;
+    if (!_userTrustMap) return;
+    try {
+      const record = {};
+      for (const [host, ts] of _userTrustMap) record[host] = ts;
+      chrome.storage.local.set(
+        { [USER_TRUST_STORAGE_KEY]: record },
+        function() { void chrome.runtime.lastError; });
+    } catch(e) { /* */ }
+  }, 800);
+}
+
+// 登记 host 为"用户信任"（传入 hostname 或完整 URL 均可）
+function markUserTrusted(urlOrHostname) {
+  let host = String(urlOrHostname || '').toLowerCase().trim();
+  if (!host) return;
+  if (/^[a-z][a-z0-9+.-]*:\/\//.test(host)) {
+    try { host = new URL(host).hostname.toLowerCase(); } catch(e) { return; }
+  }
+  if (!host || host.indexOf('.') === -1 || /\s/.test(host)) return;
+  if (!_userTrustMap) {
+    ensureUserTrustLoaded().then(function() { markUserTrusted(host); });
+    return;
+  }
+  if (_userTrustMap.size >= USER_TRUST_MAX_ENTRIES && !_userTrustMap.has(host)) {
+    const now = Date.now();
+    for (const [h, ts] of _userTrustMap) {
+      if (now - ts >= USER_TRUST_TTL_MS) _userTrustMap.delete(h);
+    }
+    if (_userTrustMap.size >= USER_TRUST_MAX_ENTRIES) {
+      let oldestHost = null, oldestTs = Infinity;
+      for (const [h, ts] of _userTrustMap) {
+        if (ts < oldestTs) { oldestTs = ts; oldestHost = h; }
+      }
+      if (oldestHost) _userTrustMap.delete(oldestHost);
+    }
+  }
+  _userTrustMap.set(host, Date.now());
+  persistUserTrustSoon();
+}
+
+// 同步查询（调用方须已 await ensureUserTrustLoaded()）
+function isUserTrustedActive(hostname) {
+  try {
+    const host = String(hostname || '').toLowerCase();
+    return !!(_userTrustMap && host && _userTrustMap.get(host) &&
+      Date.now() - _userTrustMap.get(host) < USER_TRUST_TTL_MS);
   } catch(e) { return false; }
 }
 
@@ -2697,9 +2835,31 @@ async function classifyAiChatLink(url) {
         probe.status, finalHost)
     };
   }
+  // v2.6.0 形态可疑但实测干净的降档：高滥用 TLD/连字符/IP/punycode 等
+  // 静态形态信号只是弱证据——实测可正常访问且最终落地回原注册域的站点
+  // 并未呈现任何恶意行为，一律按橙色"可疑"展示是外链误报观感的主要来源。
+  //   同注册域落地 + HTTP 正常     → unknown（绿点），面板保留完整核查依据；
+  //   HTTP ≥400（站点无正常页面）  → unknown，当前无法构成内容危害；
+  //   跨注册域重定向（短链中转等）→ 维持 warn（落点不明需警惕）。
+  // 注意：疑似仿冒品牌域名不走此降档，仍强制进入 ICP 备案第二阶段裁决
+  const homeRegistrable = getRegistrableDomain(hostname) || hostname;
+  const finalRegistrable = finalHost ? (getRegistrableDomain(finalHost) || finalHost) : '';
+  const probeHttpOk = probe.status >= 200 && probe.status < 400;
+  // 落点未知（极少见的解析失败）且 HTTP 正常时按无跳转证据处理——
+  // 维持橙色需要"确认跨注册域跳转"，而非"未确认同站"
+  if (probeHttpOk && (finalRegistrable === homeRegistrable || !finalRegistrable)) {
+    return cacheAiLinkVerdict(url, { level: 'unknown', host: hostname, probed: true,
+      reason: susTag + '；沙箱核验通过：HTTP ' + probe.status + ' 可正常访问、' +
+        '未发生跨站跳转，暂未发现风险（该域名形态在灰色站点中较常见，保持留意）' });
+  }
+  if (!probeHttpOk) {
+    return cacheAiLinkVerdict(url, { level: 'unknown', host: hostname, probed: true,
+      reason: susTag + '；目标站点无正常网页响应（HTTP ' + probe.status +
+        '），当前无法构成危害；若日后恢复访问请重新留意' });
+  }
   return cacheAiLinkVerdict(url, { level: 'warn', host: hostname, probed: true,
-    reason: susTag + '（HTTP ' + probe.status +
-      (finalHost && finalHost !== hostname ? '，重定向至 ' + finalHost : '，可直接访问') + '）' });
+    reason: susTag + '；HTTP ' + probe.status + '，且重定向至无关站点 ' +
+      finalHost + '（跳转落点不明，请谨慎访问）' });
 }
 
 async function handleAiChatLinkScan(urls, tabId) {
@@ -2917,11 +3077,27 @@ chrome.runtime.onMessage.addListener(function(msg, sender, sendResponse) {
   if (msg.action === 'scorePage') {
     const result0 = msg.result || {};
     const scoreUrl = result0.url || (sender.tab && sender.tab.url) || '';
-    refreshWhitelistCache().then(function() {
+    refreshWhitelistCache().then(async function() {
       // 后台二次品牌核查：内容脚本品牌配置未就绪漏检时补分
       const result = applyBrandCheck(result0, scoreUrl);
       let scoreHostname = '';
       try { scoreHostname = new URL(scoreUrl).hostname.toLowerCase(); } catch(e) { /* */ }
+      // v2.6.0 用户信任记忆：host 在 7 天信任期内 → 固定抵扣弱化残余启发式
+      // 噪声并豁免软拦截冻结（下方 unfrozen 判定同步放宽）。决策与增强增强
+      // 两路径共用被改写后的 result.total，保证层级判定口径一致；
+      // 白名单/黑名单/强特征通道在此之前已独立短路，不受影响
+      await ensureUserTrustLoaded();
+      const hostTrusted = isUserTrustedActive(scoreHostname);
+      if (hostTrusted && Number(result.total) > 0) {
+        const trustDiscount = Math.min(USER_TRUST_DISCOUNT, Number(result.total));
+        result.total = Number(result.total) - trustDiscount;
+        result.details = Array.isArray(result.details) ? result.details.slice() : [];
+        result.details.push({ id: 'userTrustDiscount', label: '历史信任记录抵扣',
+          points: -trustDiscount, matched: true,
+          evidence: '你此前在本站确认过继续访问/解冻（' +
+            Math.round(USER_TRUST_TTL_MS / 86400000) + ' 天内有效），综合评分已作抵扣' });
+        debug('scorePage 用户信任抵扣 -' + trustDiscount + ' url=' + scoreUrl);
+      }
       // 豁免判断：总开关关闭 / 云白名单 / 默认白名单 / 用户白名单 / 临时放行 /
       // 政府域名（v2.1.0 一律不拦截）
       const allowed = !cache.enabled ||
@@ -2979,7 +3155,8 @@ chrome.runtime.onMessage.addListener(function(msg, sender, sendResponse) {
         // v2.1.3 r3：解冻窗口期内（用户已确认解冻并刷新）只警示不冻结，
         // 回执带 unfrozen 标记，content 侧据此跳过 freezePageIfNeeded
         if (totalScore >= 100) {
-          const unfrozen = isRecentlyUnfrozen(scoreUrl);
+          // v2.6.0：解冻窗口期或用户信任期内都只警示不冻结
+          const unfrozen = isRecentlyUnfrozen(scoreUrl) || hostTrusted;
           debug('scorePage 软拦截（警示横幅' + (unfrozen ? '，窗口期内不冻结' : '+冻结') +
             '）tabId=' + (sender.tab && sender.tab.id) +
             ' total=' + totalScore + ' categories=' + categoryCount + ' url=' + scoreUrl);

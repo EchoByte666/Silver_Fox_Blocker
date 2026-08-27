@@ -42,6 +42,10 @@ Chrome/Edge MV3 浏览器扩展：拦截"银狐"木马钓鱼/仿冒网站。
 - UI 层级切换统一走 content.js `applyScoreVerdict()`：同步回执与异步对账（scoreAdjusted）共用，新增层级相关逻辑时勿在分支里单独注入/移除 UI；同步回执必须携带 `effectiveTotal`（后台实际判定分），否则状态记录不一致会导致去重失效
 - Toast 触发语义（v2.2.5）：仅在**拦截方式**（UI 层级 blocked/warn/notice/card/clear）实际切换且非首次应用时弹出，同方式内分数波动与卡片增减一律静默；15 秒防抖冷却抑制阈值抖动反复弹（scoreEscalated 硬拦截升级豁免冷却）
 - 硬拦截升级提示：background.js 跳警告页前发 `scoreEscalated` 并延迟 1.6s 再 `tabs.update`
+- 评分误报治理（v2.6.0）：`manyEmoji` 语料改为作者语料（title/h1/meta）且证据类别归入 `speech`——不再满足 hasHardEvidence 冻结门槛；speech 类正分合计封顶 `SPEECH_CAP_PTS=25`（content.js scorePage 内，超出以 id=speechCap 负分明细展示）；officialSpeech 统计需剔除否定前缀（非/不/无/没）命中。修改任一项时注意 popup/warning 页明细展示兼容
+- 连字符模式域名异步校平：content scorePage 返回 `patternDomainHit` 标记，background enhanceScoreAsync 反查 ICP（持有有效备案 `PATTERN_DOMAIN_ICP_BONUS=-20` / 明确查无 `+8` / API 不可用不动分值），执行条件（!icpClaimed 且非可信内容平台）与常量修改需保持 content/background 语义同步
+- 用户信任记忆：storage.local 键 `yhUserTrustMap`（host→ts，TTL `USER_TRUST_TTL_MS` 7 天、上限 500、800ms 防抖写回，SW 重启惰性加载）。登记入口=markUnfrozen→markUserTrusted；消费点两处语义必须一致——①scorePage 同步决策（先 await ensureUserTrustLoaded，命中则抵扣 `USER_TRUST_DISCOUNT=20` 分且回执 `unfrozen: isRecentlyUnfrozen||hostTrusted`）②enhanceScoreAsync 冻结指令加 `&& !isUserTrustedActive(hostname)`。黑名单/noah/adseo 强特征/DNR 拦截层**永不读取**信任表
+- AI 外链形态可疑降档（classifyAiChatLink 尾段）：非品牌仿冒的可疑形态链接沙箱探测后按落点分档——同注册域落地或 HTTP≥400 → `unknown`（绿点+面板留依据）；仅跨注册域重定向维持 warn。疑似仿冒品牌域名**不走此降档**，强制进入 ICP 备案第二阶段裁决
 
 ## 参考项目
 

@@ -22,7 +22,13 @@
   "content_scripts": [
     {
       "matches": ["http://*/*", "https://*/*"],
-      "js": ["modules/core.js", "content.js"],
+      "js": [
+        "modules/core.js",
+        "modules/content/verify-card.js",
+        "content.js",
+        "modules/content/link-scan.js",
+        "modules/content/sec-forum.js"
+      ],
       "run_at": "document_start",
       "all_frames": true,
       "match_about_blank": true

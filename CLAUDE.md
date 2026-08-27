@@ -32,6 +32,15 @@ Chrome/Edge MV3 浏览器扩展：拦截"银狐"木马钓鱼/仿冒网站。
 
 - `modules/core.js`：**单一事实来源（SSOT）**——日志（DEBUG/LOG/LOG_PREFIX/debug）、HARDCODED_DOMAINS、RULE_SOURCE_URLS、CLOUD_WHITELIST_URL、BRAND_SOURCE_URL、DEFAULT_WHITELIST、FETCH_TIMEOUT_MS、OFFSCREEN_WAIT_MS、matchesPatternDomain/matchesDomainList/matchesBlockedDomain、getRegistrableDomain/isSameSiteHost、isGovCnHostname（统一含 gov.hk/政务.cn 扩展后缀，content 首屏快筛语义随之加宽至与后台一致）、levenshteinWithin1、isShortLatinKeyword/shortKeywordBoundaryHit/brandDomainKeywordHit、五张平台豁免表（DEVELOPER/SEARCH_ENGINE/AI_CHAT/UGC/SECURITY_FORUM）与 isAiChatHostname/isUgcHostname/isSecurityForumHostname。改配置或这些函数只改此文件。加载方式：manifest content_scripts js 数组首位 + background.js 顶部 importScripts 首位；文件内禁止 import/export 与触碰 chrome.*/DOM（经典脚本两栖环境）；命名空间 `globalThis.__YH_CORE__`，消费方解构
 - `modules/sandbox-probe.js`：AI 外链沙箱防追踪探测独立模块（sandboxProbeUrl/doSandboxProbe + 注册域级缓存/并发去重/8s 超时；PROBE_CACHE_TTL_MS/PROBE_CACHE_MAX/AI_LINK_PROBE_TIMEOUT_MS 模块自持）；依赖 core.js 先加载；命名空间 `globalThis.__YH_SANDBOX__`
+- `modules/domain-intel.js`（v2.7.1）：域名情报——RDAP 域龄五通道（IANA→硬编码表→rdap.org→WhoDat→whoisjs）+ ICP 备案两源 + `icpNumbersMatch`；依赖 core；命名空间 `__YH_DOMAIN_INTEL__`
+- `modules/user-trust.js`（v2.7.1）：用户信任记忆（`yhUserTrust` storage.local，惰性加载/防抖写回/LRU），导出 TTL/DISCOUNT 常量；命名空间 `__YH_USER_TRUST__`
+- `modules/ai-link.js`（v2.7.1）：AI/UGC 外链核查全部逻辑（五级结论/缓存持久化/可疑信号/品牌仿冒/ICP 裁决/批次），运行时状态经 `init(deps)` 注入；命名空间 `__YH_AI_LINK__`
+- `modules/dnr-rules.js`（v2.7.1）：DNR 动态规则（分批/全量替换/串行），经 `init(deps)` 注入 getBlocklist/getAllowedDomains；命名空间 `__YH_DNR__`
+- `modules/content/verify-card.js`（v2.7.1）：CONAC 官方标识检测 + 悬浮验证卡片；命名空间 `__YH_VERIFY__`
+- `modules/content/link-scan.js`（v2.7.1）：AI/UGC 外链徽标+面板核查；导出于 scheduleLinkScan；命名空间 `__YH_LINK_SCAN__`
+- `modules/content/sec-forum.js`（v2.7.1）：安全论坛提示卡+站外链拦截；自判激活
+- 模块加载顺序：manifest content_scripts = core → verify-card → content → link-scan → sec-forum；background importScripts = core → sandbox-probe → domain-intel → user-trust → ai-link → dnr-rules。SW 类模块的状态依赖一律经 `init(deps)` 依赖注入（模块不直接引用 SW 全局集）；content 类模块在 DOM 上下文按序加载，IIFE 内自动短路
+- 二期路线（v2.7.0 的计划）已基本完工：bg 仅剩增强对账/message 路由/初始化/事件监听；content 主 IIFE 保留评分引擎/冻结/横幅/Toast；popup/offscreen 副本收敛 + `type:module` 升级 + 消息路由分离仍留作后续
 - 平台豁免语义速查：AI_CHAT/UGC/SECURITY_FORUM 三表=跳过品牌匹配 + manyEmoji/officialSpeech 不加分 + ICP 三通道与后台 API 核验全跳过（黑名单/DNR 拦截层不受影响）；UGC 另激活外链核查通道且单批 30（AI 对话 15）；论坛不激活外链核查，特有=提示卡片 + 未加白站外链接拦截（content.js 末尾模块）
 - 仍存在的重复副本（二期收敛目标）：popup.js 与 offscreen.js 的 `RULE_SOURCE_URLS`、popup.js 的 `BUILT_IN_WHITELIST`
 - 二期路线：manifest background 加 `"type": "module"` 升级 ES modules（切换前需全量排查隐式全局赋值）；随后继续拆分 background.js（rdap/icp 域名情报、ai-link 分类与 verdict 缓存、user-trust 信任记忆、dnr 规则、消息路由）与 content.js（评分引擎/冻结/外链核查/论坛防护等功能域）

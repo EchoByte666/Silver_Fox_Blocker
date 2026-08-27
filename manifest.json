@@ -41,6 +41,7 @@
     "resources": ["warning.html"],
     "matches": ["http://*/*", "https://*/*"]
   }],
+  "options_page": "options/options.html",
   "action": {
     "default_popup": "popup.html",
     "default_title": "银狐拦截系统",

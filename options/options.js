@@ -13,16 +13,16 @@
       title: '启用拦截', desc: '关闭后扩展停止一切拦截检测（下载保护与 DNR 规则仍生效）。',
       unit: false },
     { key: 'downloadBlock', section: 'download',
-      title: '可执行文件下载保护', desc: '从可疑/未受信站点下载可执行与脚本文件（exe/msi/bat/zip 等）时自动取消，并提示原因。仅保留真实文件分发白名单。',
+      title: '可执行文件下载保护', desc: '从可疑/未受信站点下载可执行与脚本文件（exe/msi/bat/zip 等）时自动取消，并提示原因（框架预留，即将支持）。',
       unit: false },
     { key: 'scriptBlock', section: 'script',
-      title: '恶意脚本拦截', desc: '对黑名单站点发出的脚本/子框架请求使用 DNR 规则拦截（默认关闭，开启可防投毒脚本注入）。',
+      title: '恶意脚本拦截', desc: '对黑名单站点发出的脚本/子框架请求使用 DNR 规则拦截（框架预留，即将支持）。',
       unit: false },
     { key: 'locationBlocker', section: 'privacy',
-      title: '禁用浏览器定位 API', desc: '覆盖 navigator.geolocation，页面无法读取你的定位（接口返回已拒绝）。仅影响定位，不影响 IP 层。',
+      title: '禁用浏览器定位 API', desc: '覆盖 navigator.geolocation，页面无法读取你的定位（接口返回已拒绝）。仅影响定位，不影响 IP 层（框架预留，即将支持）。',
       unit: false },
     { key: 'fingerprintBlocker', section: 'privacy',
-      title: '减弱指纹采集（实验）', desc: '对 canvas / WebGL / AudioContext 指纹接口做轻微扰动（可能影响部分页面渲染，默认关闭）。',
+      title: '减弱指纹采集（实验）', desc: '对 canvas / WebGL / AudioContext 指纹接口做轻微扰动（可能影响部分页面渲染，框架预留，默认关闭）。',
       unit: false },
     { key: 'notifyOnBlock', section: 'general',
       title: '拦截时弹通知', desc: '发生下载/脚本拦截时显示系统通知（需通知权限）。',
@@ -59,9 +59,9 @@
     const s = SECTIONS[key];
     if (!s) return;
     $('#section-container').innerHTML = sectionHtml(key, s.title, s.desc);
-    if (s.items.length) {
+    if (s.keys.length) {
       const wrap = $('#sec-' + key);
-      s.items.forEach(function(k) {
+      s.keys.forEach(function(k) {
         const meta = META.find(m => m.key === k);
         if (meta) wrap.insertAdjacentHTML('beforeend', cardHtml(meta, !!settings[k]));
       });

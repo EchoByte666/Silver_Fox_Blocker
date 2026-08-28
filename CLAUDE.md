@@ -35,7 +35,8 @@ Chrome/Edge MV3 浏览器扩展：拦截"银狐"木马钓鱼/仿冒网站。
 - `modules/domain-intel.js`（v2.7.1）：域名情报——RDAP 域龄五通道（IANA→硬编码表→rdap.org→WhoDat→whoisjs）+ ICP 备案两源 + `icpNumbersMatch`；依赖 core；命名空间 `__YH_DOMAIN_INTEL__`
 - `modules/user-trust.js`（v2.7.1）：用户信任记忆（`yhUserTrust` storage.local，惰性加载/防抖写回/LRU），导出 TTL/DISCOUNT 常量；命名空间 `__YH_USER_TRUST__`
 - `modules/ai-link.js`（v2.7.1）：AI/UGC 外链核查全部逻辑（五级结论/缓存持久化/可疑信号/品牌仿冒/ICP 裁决/批次），运行时状态经 `init(deps)` 注入；命名空间 `__YH_AI_LINK__`
-- `modules/dnr-rules.js`（v2.7.1）：DNR 动态规则（分批/全量替换/串行），经 `init(deps)` 注入 getBlocklist/getAllowedDomains；命名空间 `__YH_DNR__`
+- `modules/settings-store.js`（v2.8.0）：设置项单一事实来源——`DEFAULTS` 默认值 + `normalizeSettings`（补齐缺失/强转布尔/剔除未知键）；现存 `enabled`、`downloadBlock`、`scriptBlock`、`locationBlocker`、`fingerprintBlocker`、`notifyOnBlock` 六项，除 `enabled` 外均为**框架预留 stub**（仅持久化与展示，未接实际拦截）。设置持久化在 storage.local `settings` 键；命名空间 `__YH_SETTINGS__`
+- 设置面板 `options/options.html|css|js`（v2.8.0）：manifest `options_ui` 指向；经 `getSettings`/`saveSettings` 消息与后台通信（后台 loadCache 读取、storage.onChanged 同步内存、cache.settings 存规范化全集）；新开关"实际生效实现"逐个接线到对应模块后，把 settings-store 的 `PERMISSION_GATED` stub 标记改为 wired 即可
 - `modules/content/verify-card.js`（v2.7.1）：CONAC 官方标识检测 + 悬浮验证卡片；命名空间 `__YH_VERIFY__`
 - `modules/content/link-scan.js`（v2.7.1）：AI/UGC 外链徽标+面板核查；导出于 scheduleLinkScan；命名空间 `__YH_LINK_SCAN__`
 - `modules/content/sec-forum.js`（v2.7.1）：安全论坛提示卡+站外链拦截；自判激活

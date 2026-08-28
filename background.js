@@ -25,7 +25,7 @@
 // 模块以 globalThis 命名空间暴露，此处解构为顶层绑定——全部调用点零改动
 importScripts('modules/core.js', 'modules/sandbox-probe.js',
   'modules/domain-intel.js', 'modules/user-trust.js',
-  'modules/ai-link.js', 'modules/dnr-rules.js');
+  'modules/ai-link.js', 'modules/dnr-rules.js', 'modules/settings-store.js');
 
 const CORE = globalThis.__YH_CORE__;
 const {
@@ -47,6 +47,7 @@ const { ensureUserTrustLoaded, markUserTrusted, isUserTrustedActive,
   USER_TRUST_TTL_MS, USER_TRUST_DISCOUNT } = globalThis.__YH_USER_TRUST__;
 const { handleAiChatLinkScan } = globalThis.__YH_AI_LINK__;
 const { updateDNR, scheduleDNRUpdate } = globalThis.__YH_DNR__;
+const { normalizeSettings, DEFAULTS } = globalThis.__YH_SETTINGS__;
 // 依赖注入：模块不直接引用 SW 可变状态，一律经下方闭包访问器运行时取值
 globalThis.__YH_AI_LINK__.init({
   debug: debug,
@@ -72,7 +73,8 @@ const cache = {
   unfrozen: {},    // v2.1.3 r3 新增：解冻窗口期（hostname → 解冻时间戳）
   blockedCount: 0, enabled: true, status: 'pending',
   brandConfig: [], // v2.0.0 新增：品牌库配置（评分引擎的品牌冒充检测用）
-  brandsVer: ''    // v2.1.3 新增：品牌库生成时的扩展版本（升级后强制重算）
+  brandsVer: '',    // v2.1.3 新增：品牌库生成时的扩展版本（升级后强制重算）
+  settings: {}      // v2.8.0 新增：规范化设置全集（downloadBlock/scriptBlock/通知等）
 };
 
 // 域名匹配 Set 缓存：规则变化时重建，导航匹配查询 O(1)。
@@ -1012,7 +1014,13 @@ async function loadCache() {
     }
     if (r.cloudWhitelist) cache.cloudWhitelist = r.cloudWhitelist;
     if (r.blockedCount) cache.blockedCount = r.blockedCount;
-    if (r.settings) cache.enabled = r.settings.enabled !== false;
+    if (r.settings) {
+      // v2.8.0：以 SSOT 规范化（补齐缺失字段/剔除未知键），enabled 兼容旧结构
+      cache.settings = normalizeSettings(r.settings);
+      cache.enabled = cache.settings.enabled !== false;
+    } else {
+      cache.settings = Object.assign({}, DEFAULTS);
+    }
     if (r.lastRefreshStatus) cache.status = r.lastRefreshStatus;
     // v2.0.0：恢复上次拉取成功的品牌库（避免每次唤醒都请求远程）
     // v2.1.0：恢复时同样应用本地关键词修正——storage 里可能是
@@ -1702,6 +1710,13 @@ try {
     if (changes.lastRefreshStatus && changes.lastRefreshStatus.newValue) {
       cache.status = changes.lastRefreshStatus.newValue;
     }
+    // v2.8.0：设置面板保存后同步内存（enabled 兼容快速失效）
+    if (changes.settings && changes.settings.newValue) {
+      cache.settings = normalizeSettings(changes.settings.newValue);
+      cache.enabled = cache.settings.enabled !== false;
+      debug('settings 变化同步: enabled=' + cache.enabled +
+        ' downloadBlock=' + cache.settings.downloadBlock);
+    }
     // v2.0.0：品牌库更新（如 popup 触发的手动刷新）同步内存缓存
     // v2.1.0：同步时应用本地关键词修正（写入方可能是未打补丁的旧路径）
     if (changes.brandConfig && Array.isArray(changes.brandConfig.newValue)) {
@@ -1743,6 +1758,24 @@ chrome.runtime.onMessage.addListener(function(msg, sender, sendResponse) {
   if (msg.action === 'getStatus') {
     sendResponse({ rules: cache.blocklist.length, blocked: cache.blockedCount, whitelist: cache.whitelist.length, status: cache.status });
     return true;
+  }
+  // v2.8.0：设置面板通信。settings 全量规范化后存 storage.local（onChanged 自同步内存）
+  if (msg.action === 'getSettings') {
+    sendResponse({ settings: Object.assign({}, cache.settings) });
+    return true;
+  }
+  if (msg.action === 'saveSettings') {
+    const patch = (msg.settings && typeof msg.settings === 'object') ? msg.settings : {};
+    const merged = Object.assign({}, cache.settings, patch);
+    const normalized = normalizeSettings(merged);
+    cache.settings = normalized;
+    cache.enabled = normalized.enabled !== false;
+    storageSet({ settings: normalized }).then(function() {
+      sendResponse({ ok: true, settings: Object.assign({}, normalized) });
+    }).catch(function() {
+      sendResponse({ ok: false });
+    });
+    return true; // 异步回执，保持通道
   }
   // v2.0.0 新增：内容脚本启动时获取品牌库配置（评分引擎的品牌冒充检测用）
   if (msg.action === 'getBrandConfig') {

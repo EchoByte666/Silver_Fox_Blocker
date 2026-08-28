@@ -123,6 +123,28 @@
     return p;
   }
 
+  // ===== v2.7.3：探测目标收紧（Bot 检测规避 + 不可达/无意义目标拒绝）=====
+  // 探测请求应看起来像正常用户访问，不触发目标站的 Bot/爬虫防护。
+  // 以下目标形态不探测（避免无意义请求被反爬机制标记 → 导致误报）：
+  //   - 非标准端口（非 80/443）：打到非常规服务，探测结果不可靠
+  //   - 可执行/脚本文件扩展名：探测 .exe/.msi 等无意义，且可能被目标站
+  //     或用户本机的安全软件（如卡巴斯基）标记为恶意访问
+  //   - 暗网/匿名 TLD（.onion/.i2p）：不可达，语义即"不想被发现"
+  const NON_STANDARD_PORTS = new Set([80, 443]);
+  const EXECUTABLE_EXTENSIONS = /\.(exe|msi|bat|cmd|vbs|ps1|scr|com|pif|jar|apk|dmg|pkg|deb|rpm|msix|appx)$/i;
+  const DARK_WEB_TLDS = ['onion', 'i2p', 'bit'];
+
+  function isProbeableTarget(urlObj) {
+    const port = urlObj.port ? Number(urlObj.port) :
+      (urlObj.protocol === 'https:' ? 443 : urlObj.protocol === 'http:' ? 80 : -1);
+    if (!NON_STANDARD_PORTS.has(port)) return false;
+    const pathname = urlObj.pathname.toLowerCase();
+    if (EXECUTABLE_EXTENSIONS.test(pathname)) return false;
+    const tld = urlObj.hostname.split('.').pop().toLowerCase();
+    if (DARK_WEB_TLDS.indexOf(tld) !== -1) return false;
+    return true;
+  }
+
   // 沙箱防追踪探测本体：校验目标安全 → 解析 IP 排除内网 → 跟随重定向取最终
   // 落点（不读响应体），8 秒总超时
   async function doSandboxProbe(url) {
@@ -133,6 +155,10 @@
       }
       if (hasUserInfo(url)) return { ok: false, error: 'URL 含用户凭据，已拒绝探测' };
       const priHost = pri.hostname.toLowerCase().replace(/\[|\]/g, '');
+      // ---- v2.7.3：目标形态收紧（不可达/无意义/易触发 Bot 防护）----
+      if (!isProbeableTarget(pri)) {
+        return { ok: false, error: '非标准探测目标（端口/路径/TLD 异常），不发起请求' };
+      }
       // ---- SSRF 防线①：字面量内网/回环/保留地址直接拒绝（不发出请求）----
       if (isReservedHostLiteral(priHost)) {
         return { ok: false, error: '内网/回环/保留地址，已拒绝探测（疑似 SSRF）' };
@@ -154,7 +180,12 @@
           cache: 'no-store',
           redirect: 'follow',
           referrerPolicy: 'no-referrer',
-          headers: { 'Accept': 'text/html,application/xhtml+xml;q=0.9,*/*;q=0.5' },
+          headers: {
+            'Accept': 'text/html,application/xhtml+xml;q=0.9,*/*;q=0.5',
+            // v2.7.3：中性化 Accept-Language，不泄露中文用户身份。
+            // 目标站据此无法判断"中文用户访问了英文站"等组合特征
+            'Accept-Language': 'en-US,en;q=0.9'
+          },
           signal: controller.signal
         });
         const finalHost = (function() { try { return new URL(resp.url || url).hostname.toLowerCase(); } catch(e) { return ''; } })();

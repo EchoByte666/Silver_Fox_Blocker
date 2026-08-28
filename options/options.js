@@ -103,9 +103,32 @@
   }
   function saveSettings() {
     return new Promise(function(resolve) {
-      chrome.runtime.sendMessage({ action: 'saveSettings', settings: settings }, function(res) {
-        resolve(!!(res && res.ok));
-      });
+      let done = false;
+      const finish = function(ok) { if (!done) { done = true; resolve(ok); } };
+      // 主通道：经后台规范化 + 持久化（幂等，安全路径）
+      try {
+        chrome.runtime.sendMessage({ action: 'saveSettings', settings: settings }, function(res) {
+          if (chrome.runtime.lastError) { fallbackSave(); return; }   // 后台未就绪 → 兜底
+          if (res && res.ok) { finish(true); return; }
+          fallbackSave();
+        });
+      } catch(e) { fallbackSave(); }
+      // 兜底：后台消息路由不可用（MV3 SW 刚回收等边界）时直写 storage.local。
+      // 面板存储的 JSON 结构与后台正常读写同源（都含全量 settings），
+      // 后台下次 loadCache 会经 normalizeSettings 规范化读回，语义不变。
+      function fallbackSave() {
+        try {
+          chrome.storage.local.set({ settings: normalizeLocalSettings() }, function() {
+            finish(!chrome.runtime.lastError);
+          });
+        } catch(e) { finish(false); }
+      }
+      // 本地规范化：仅布尔字段、补齐缺失、剔未知键（与后台端一致）
+      function normalizeLocalSettings() {
+        const out = {};
+        META.forEach(function(m) { out[m.key] = settings[m.key] === true; });
+        return out;
+      }
     });
   }
   function toast(msg, kind) {

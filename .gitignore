@@ -1,0 +1,26 @@
+# ===== 本地工具与运行时缓存 =====
+
+# 本机 Claude / 本地 AI 工具设置的本地状态（可能含本地路径等隐私，不推送）
+.claude/
+.claude.local.json
+
+# wrangler（Cloudflare Worker）本地缓存目录。
+# 其中的 wrangler-account.json 会记录账户 ID 与登录邮箱，属敏感信息，严禁推送。
+**/.wrangler/
+
+# ===== IDE / 编辑器 =====
+.idea/
+.vscode/
+
+# ===== 系统文件 =====
+.DS_Store
+Thumbs.db
+
+# ===== 构建产物 / 依赖 =====
+node_modules/
+dist/
+
+# ===== 参考项目目录 =====
+# 另一独立开源项目（VirusDetector）的整体源码，仅作为参考，
+# 不随本仓库推送；已在库中跟踪的历史不做重写。
+一个优秀的开源项目，可以参考一下/

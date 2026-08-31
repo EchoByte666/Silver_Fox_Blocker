@@ -15,15 +15,16 @@ English | [简体中文](README.md)
 > This project is an upgrade and optimization of the **Silver Fox Interceptor System**, open-sourced under the MIT license.
 >
 > **Original Author**:
-> - GitHub: <!-- TODO: fill original author GitHub -->[GitHub](#)
-> - Bilibili: <!-- TODO: fill original author Bilibili -->[Bilibili](#)
+>
+> - GitHub: [GitHub](https://github.com/YYT-2013)
+> - Bilibili: [Bilibili](https://space.bilibili.com/1222118214?)
 >
 > **Original Project Distribution**:
-> - GitHub repository: <!-- TODO: fill -->[GitHub](#)
-> - Kafan forum: <!-- TODO: fill -->[Kafan](#)
-> - Bilibili: <!-- TODO: fill -->[Bilibili](#)
 >
-> **Note**: The `一个优秀的开源项目，可以参考一下/` directory is another independent open-source project (VirusDetector). We only referenced its ICP lookup — it is **NOT** the base project of this repo.
+> - GitHub repository: [GitHub](https://github.com/YYT-2013/yinhu-site-blocker)
+> - Kafan forum: [Kafan](https://bbs.kafan.cn/thread-2293717-1-1.html)
+>
+> **Note**: The `一个优秀的开源项目，可以参考一下/` directory is another independent open-source project (VirusDetector). We only referenced its ICP lookups — it is **NOT** the base project of this repo. That project is also open-sourced under the MIT license. [GitHub](https://github.com/Lolitide/VirusDetector)
 
 ## About
 
@@ -58,6 +59,7 @@ modules/
     ├── link-scan.js           AI/UGC link badge + detail panel
     └── sec-forum.js           Security forum notice card + offsite link block
 ```
+
 ## Features
 
 ### Detection Tiers
@@ -137,4 +139,4 @@ Chrome extension menu → "Options". Sections: General / Download Protection / S
 
 ## License
 
-This project is open-sourced under the [MIT License](LICENSE). The original [Silver Fox Interceptor System](#) is also MIT-licensed.
+This project is open-sourced under the [MIT License](LICENSE). The original [Silver Fox Interceptor System](https://github.com/YYT-2013/yinhu-site-blocker) is also MIT-licensed.

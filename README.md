@@ -16,16 +16,15 @@
 > 
 > **原作者**：
 > 
-> - GitHub：<!-- TODO: 填入原作者 GitHub 链接 -->[GitHub](#)
-> - Bilibili：<!-- TODO: 填入原作者 Bilibili 链接 -->[Bilibili](#)
+> - GitHub：[GitHub](https://github.com/YYT-2013)
+> - Bilibili：[Bilibili](https://space.bilibili.com/1222118214?)
 > 
 > **原项目分发地址**：
 > 
-> - GitHub 仓库：<!-- TODO: 填入 -->[GitHub](#)
-> - 卡饭论坛：<!-- TODO: 填入 -->[卡饭](#)
-> - Bilibili：<!-- TODO: 填入 -->[Bilibili](#)
+> - GitHub 仓库：[GitHub](https://github.com/YYT-2013/yinhu-site-blocker)
+> - 卡饭论坛：[卡饭](https://bbs.kafan.cn/thread-2293717-1-1.html)
 > 
-> **注**：本仓库中 `一个优秀的开源项目，可以参考一下/` 目录是另一款独立开源项目（VirusDetector），仅参考了其 ICP 备案查询实现，**并非**本项目所基于的原项目。
+> **注**：本仓库中 `一个优秀的开源项目，可以参考一下/` 目录是另一款独立开源项目（VirusDetector），仅参考了其 ICP 备案查询实现，**并非**本项目所基于的原项目，该项目同样以MIT协议开源[GitHub](https://github.com/Lolitide/VirusDetector)。
 
 ## 项目简介
 
@@ -141,4 +140,4 @@ Chrome 扩展菜单 →「选项」打开。分区：常规 / 下载保护 / 脚
 
 ## 许可证
 
-本项目基于 [MIT License](LICENSE) 开源。原项目 [银狐拦截系统](#) 同以 MIT 协议开源。
+本项目基于 [MIT License](LICENSE) 开源。原项目 [银狐拦截系统](https://github.com/YYT-2013/yinhu-site-blocker) 同以 MIT 协议开源。

@@ -24,7 +24,7 @@
 > - GitHub 仓库：[GitHub](https://github.com/YYT-2013/yinhu-site-blocker)
 > - 卡饭论坛：[卡饭](https://bbs.kafan.cn/thread-2293717-1-1.html)
 > 
-> **注**：本仓库中 `一个优秀的开源项目，可以参考一下/` 目录是另一款独立开源项目（VirusDetector），仅参考了其 ICP 备案查询实现，**并非**本项目所基于的原项目，该项目同样以MIT协议开源[GitHub](https://github.com/Lolitide/VirusDetector)。
+> **注**：本项目的 ICP 备案查询实现参考了另一款独立开源项目 VirusDetector（同样以 MIT 协议开源），**并非**本项目所基于的原项目。[GitHub](https://github.com/Lolitide/VirusDetector)
 
 ## 项目简介
 

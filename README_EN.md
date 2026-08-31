@@ -24,7 +24,7 @@ English | [简体中文](README.md)
 > - GitHub repository: [GitHub](https://github.com/YYT-2013/yinhu-site-blocker)
 > - Kafan forum: [Kafan](https://bbs.kafan.cn/thread-2293717-1-1.html)
 >
-> **Note**: The `一个优秀的开源项目，可以参考一下/` directory is another independent open-source project (VirusDetector). We only referenced its ICP lookups — it is **NOT** the base project of this repo. That project is also open-sourced under the MIT license. [GitHub](https://github.com/Lolitide/VirusDetector)
+> **Note**: This project's ICP record lookup implementation references another independent open-source project, VirusDetector (also open-sourced under the MIT license). It is **NOT** the base project of this repo. [GitHub](https://github.com/Lolitide/VirusDetector)
 
 ## About
 

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "银狐拦截系统",
-  "version": "2.0.0",
+  "version": "2.7.4",
   "description": "银狐病毒网站拦截系统 - 从远程规则列表获取恶意网址并自动拦截",
   "minimum_chrome_version": "109",
   "author": "Deep_Format (https://space.bilibili.com/1222118214), EchoByte",

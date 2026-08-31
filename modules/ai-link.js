@@ -225,16 +225,16 @@ function verifyIcpForAiLink(registrable, hostname, susTag, httpStatus, finalHost
     }
     const redirectNote = finalHost && finalHost !== hostname
       ? '，重定向至 ' + finalHost : '';
-    return { level: 'warn', host: hostname, probed: true,
-      reason: susTag + '；ICP 备案核验暂不可用，请谨慎访问（HTTP ' +
+    return { level: 'unknown', host: hostname, probed: true,
+      reason: susTag + '；ICP 备案核验暂不可用，无法判断安全性（HTTP ' +
         httpStatus + redirectNote + '）' };
   });
   return Promise.race([
     judged,
     new Promise(function(resolve) {
       setTimeout(function() {
-        resolve({ level: 'warn', host: hostname, probed: true,
-          reason: susTag + '；ICP 备案核验超时（接口无响应，可能被安全软件拦截），请谨慎访问' });
+        resolve({ level: 'unknown', host: hostname, probed: true,
+          reason: susTag + '；ICP 备案核验超时（接口无响应，可能被安全软件拦截），无法判断安全性' });
       }, AI_LINK_ICP_TIMEOUT_MS);
     })
   ]);
@@ -281,10 +281,12 @@ async function classifyAiChatLink(url) {
   const susTag = susReasons[0] +
     (susReasons.length > 1 ? ' 等 ' + susReasons.length + ' 项可疑特征' : '');
   // 可疑形态：沙箱防追踪探测，重点核对重定向落地点
+  // v2.7.4：探测失败 → unknown（不是可疑）。站点可能只是临时不可达或
+  // 被安全软件拦截，不代表危险——把"查不到"标为"可疑"是误报主要来源之一
   const probe = await sandboxProbeUrl(url);
   if (!probe.ok) {
-    return cacheAiLinkVerdict(url, { level: 'warn', host: hostname, probed: true,
-      reason: susTag + '；沙箱探测失败（' + probe.error + '），请谨慎访问' });
+    return cacheAiLinkVerdict(url, { level: 'unknown', host: hostname, probed: true,
+      reason: '沙箱探测失败（' + probe.error + '），无法判断安全性' });
   }
   let finalHost = '';
   try { finalHost = new URL(probe.finalUrl).hostname.toLowerCase(); } catch(e) { /* */ }
@@ -355,8 +357,10 @@ async function handleAiChatLinkScan(urls, tabId) {
         }).catch(function() {
           // v2.3.7：终局链路任何异常都必须落地结论并推送——
           // 徽标绝不能停在"检测中/ICP核验中"过渡态
-          const fb = { level: 'warn', probed: true,
-            reason: '核验流程异常（已中止），请谨慎访问该链接' };
+          // v2.3.7：终局链路任何异常都必须落地结论并推送——
+          // 徽标绝不能停在"检测中/ICP核验中"过渡态
+          const fb = { level: 'unknown', probed: true,
+            reason: '核验流程异常（已中止），无法判断安全性' };
           cacheAiLinkVerdict(url, fb);
           if (tabId == null) return;
           try {

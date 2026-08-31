@@ -123,21 +123,16 @@
     return p;
   }
 
-  // ===== v2.7.3：探测目标收紧（Bot 检测规避 + 不可达/无意义目标拒绝）=====
-  // 探测请求应看起来像正常用户访问，不触发目标站的 Bot/爬虫防护。
-  // 以下目标形态不探测（避免无意义请求被反爬机制标记 → 导致误报）：
-  //   - 非标准端口（非 80/443）：打到非常规服务，探测结果不可靠
-  //   - 可执行/脚本文件扩展名：探测 .exe/.msi 等无意义，且可能被目标站
-  //     或用户本机的安全软件（如卡巴斯基）标记为恶意访问
-  //   - 暗网/匿名 TLD（.onion/.i2p）：不可达，语义即"不想被发现"
-  const NON_STANDARD_PORTS = new Set([80, 443]);
+  // ===== v2.7.4：探测目标判定 =====
+  // v2.7.3 曾限制非标准端口不探测——但用户明确要求"非标准端口也探测"，
+  // 且端口形态本身不是"是否值得探测"的合理判据（很多正规服务用非标准端口）。
+  // 仅排除真正不可达的目标：
+  //   - 暗网 TLD（.onion/.i2p）：浏览器无法解析，探测必然失败
+  // 可执行/脚本文件扩展名保留拒绝：探测这些无意义且可能被安全软件标记
   const EXECUTABLE_EXTENSIONS = /\.(exe|msi|bat|cmd|vbs|ps1|scr|com|pif|jar|apk|dmg|pkg|deb|rpm|msix|appx)$/i;
-  const DARK_WEB_TLDS = ['onion', 'i2p', 'bit'];
+  const DARK_WEB_TLDS = ['onion', 'i2p'];
 
   function isProbeableTarget(urlObj) {
-    const port = urlObj.port ? Number(urlObj.port) :
-      (urlObj.protocol === 'https:' ? 443 : urlObj.protocol === 'http:' ? 80 : -1);
-    if (!NON_STANDARD_PORTS.has(port)) return false;
     const pathname = urlObj.pathname.toLowerCase();
     if (EXECUTABLE_EXTENSIONS.test(pathname)) return false;
     const tld = urlObj.hostname.split('.').pop().toLowerCase();

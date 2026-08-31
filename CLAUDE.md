@@ -57,7 +57,7 @@ Chrome/Edge MV3 浏览器扩展：拦截"银狐"木马钓鱼/仿冒网站。
 - 评分误报治理（v2.6.0）：`manyEmoji` 语料改为作者语料（title/h1/meta）且证据类别归入 `speech`——不再满足 hasHardEvidence 冻结门槛；speech 类正分合计封顶 `SPEECH_CAP_PTS=25`（content.js scorePage 内，超出以 id=speechCap 负分明细展示）；officialSpeech 统计需剔除否定前缀（非/不/无/没）命中。修改任一项时注意 popup/warning 页明细展示兼容
 - 连字符模式域名异步校平：content scorePage 返回 `patternDomainHit` 标记，background enhanceScoreAsync 反查 ICP（持有有效备案 `PATTERN_DOMAIN_ICP_BONUS=-20` / 明确查无 `+8` / API 不可用不动分值），执行条件（!icpClaimed 且非可信内容平台）与常量修改需保持 content/background 语义同步
 - 用户信任记忆：storage.local 键 `yhUserTrustMap`（host→ts，TTL `USER_TRUST_TTL_MS` 7 天、上限 500、800ms 防抖写回，SW 重启惰性加载）。登记入口=markUnfrozen→markUserTrusted；消费点两处语义必须一致——①scorePage 同步决策（先 await ensureUserTrustLoaded，命中则抵扣 `USER_TRUST_DISCOUNT=20` 分且回执 `unfrozen: isRecentlyUnfrozen||hostTrusted`）②enhanceScoreAsync 冻结指令加 `&& !isUserTrustedActive(hostname)`。黑名单/noah/adseo 强特征/DNR 拦截层**永不读取**信任表
-- AI 外链形态可疑降档（classifyAiChatLink 尾段）：非品牌仿冒的可疑形态链接沙箱探测后按落点分档——同注册域落地或 HTTP≥400 → `unknown`（绿点+面板留依据）；仅跨注册域重定向维持 warn。疑似仿冒品牌域名**不走此降档**，强制进入 ICP 备案第二阶段裁决
+- AI 外链结论分级（v2.7.4 修正）：danger=已知恶意（黑名单/硬编码/重定向至恶意域）；warn=**有确认证据**（可疑形态+ICP 查无备案、或跨注册域重定向）；unknown=**无法判断**（探测失败/核验超时/核验异常——不把"查不到"标为"可疑"）；safe=可信域名；pending/pendingIcp=过渡态（仅内部，不推送给用户）。**架构原则：探测失败≠危险，查无结果≠可疑**——宁可多绿点，不可误橙点
 
 ## 参考项目
 

@@ -13,16 +13,18 @@
 ## 声明
 
 > 此项目基于以 MIT 协议开源的**银狐拦截系统**升级与优化。
->
+> 
 > **原作者**：
+> 
 > - GitHub：<!-- TODO: 填入原作者 GitHub 链接 -->[GitHub](#)
 > - Bilibili：<!-- TODO: 填入原作者 Bilibili 链接 -->[Bilibili](#)
->
+> 
 > **原项目分发地址**：
+> 
 > - GitHub 仓库：<!-- TODO: 填入 -->[GitHub](#)
 > - 卡饭论坛：<!-- TODO: 填入 -->[卡饭](#)
 > - Bilibili：<!-- TODO: 填入 -->[Bilibili](#)
->
+> 
 > **注**：本仓库中 `一个优秀的开源项目，可以参考一下/` 目录是另一款独立开源项目（VirusDetector），仅参考了其 ICP 备案查询实现，**并非**本项目所基于的原项目。
 
 ## 项目简介
@@ -63,24 +65,24 @@ modules/
 
 ### 拦截检测
 
-| 层级 | 条件 | 行为 |
-|------|------|------|
-| 🔴 硬拦截 | 总分 ≥150 且证据类别 ≥2，或黑名单/强特征命中 | 跳转警告页（展示评分明细 + 正版官网引导） |
-| 🟡 软拦截 | 总分 100–149 且含结构/资源类证据 | 警示横幅 + 页面冻结（可解冻） |
-| 🔵 低权提示 | 总分 80–99 | 灰蓝细横幅（浏览不中断） |
-| ⚪ 提示卡片 | 总分 60–79 或品牌冒充嫌疑 | 右下角悬浮卡片 |
+| 层级      | 条件                          | 行为                     |
+| ------- | --------------------------- | ---------------------- |
+| 🔴 硬拦截  | 总分 ≥150 且证据类别 ≥2，或黑名单/强特征命中 | 跳转警告页（展示评分明细 + 正版官网引导） |
+| 🟡 软拦截  | 总分 100–149 且含结构/资源类证据       | 警示横幅 + 页面冻结（可解冻）       |
+| 🔵 低权提示 | 总分 80–99                    | 灰蓝细横幅（浏览不中断）           |
+| ⚪ 提示卡片  | 总分 60–79 或品牌冒充嫌疑            | 右下角悬浮卡片                |
 
 ### 平台智能豁免
 
 针对不同类型网站的内容特征，自动切换检测策略：
 
-| 平台类型 | 豁免 | 外链核查 | 示例 |
-|----------|------|----------|------|
-| **AI 对话**（28 域） | 品牌匹配 / 表情符号 / 话术 / ICP 全跳过 | ✅ 单批 15 | ChatGPT、DeepSeek、Kimi、通义… |
-| **UGC 平台**（29 域） | 同上 | ✅ 单批 30 | B站、微博、知乎、贴吧… |
-| **安全论坛**（6 域） | 同上 + 提示卡片 + 外链拦截 | ❌ | 卡饭、看雪、52pojie、T00ls… |
-| **搜索引擎**（34 域） | 品牌匹配跳过 | — | Google、百度、Bing… |
-| **开发者平台**（21 域） | 品牌匹配跳过 | — | GitHub、StackOverflow… |
+| 平台类型             | 豁免                         | 外链核查    | 示例                        |
+| ---------------- | -------------------------- | ------- | ------------------------- |
+| **AI 对话**（28 域）  | 品牌匹配 / 表情符号 / 话术 / ICP 全跳过 | ✅ 单批 15 | ChatGPT、DeepSeek、Kimi、通义… |
+| **UGC 平台**（29 域） | 同上                         | ✅ 单批 30 | B站、微博、知乎、贴吧…              |
+| **安全论坛**（6 域）    | 同上 + 提示卡片 + 外链拦截           | ❌       | 卡饭、看雪、52pojie、T00ls…      |
+| **搜索引擎**（34 域）   | 品牌匹配跳过                     | —       | Google、百度、Bing…           |
+| **开发者平台**（21 域）  | 品牌匹配跳过                     | —       | GitHub、StackOverflow…     |
 
 ### AI/UGC 外链核查
 
@@ -116,26 +118,26 @@ Chrome 扩展菜单 →「选项」打开。分区：常规 / 下载保护 / 脚
 
 ## 文件结构
 
-| 文件 | 说明 |
-|------|------|
-| `manifest.json` | MV3 配置 |
-| `background.js` | SW 主逻辑（评分决策 + 消息路由 + DNR 接线） |
-| `content.js` | 内容脚本主逻辑（评分引擎 + 冻结 + 横幅 + Toast） |
-| `modules/core.js` | 共享 SSOT（配置 + 纯函数 + 豁免表） |
-| `modules/sandbox-probe.js` | 沙箱防追踪探测 |
-| `modules/domain-intel.js` | 域名情报（RDAP/ICP） |
-| `modules/user-trust.js` | 用户信任记忆 |
-| `modules/ai-link.js` | AI/UGC 外链核查 |
-| `modules/dnr-rules.js` | DNR 规则生命周期 |
-| `modules/settings-store.js` | 设置 SSOT |
-| `modules/content/verify-card.js` | 官方标识检测 + 验证卡片 |
-| `modules/content/link-scan.js` | 外链徽标 + 面板 |
-| `modules/content/sec-forum.js` | 安全论坛防护 |
-| `options/` | 设置面板 |
-| `popup.html/js` | 弹窗（状态 / 白名单管理） |
-| `warning.html/js` | 警告页 |
-| `offscreen.js` | Offscreen 规则拉取 |
-| `brands.json` | 内置品牌库 |
+| 文件                               | 说明                              |
+| -------------------------------- | ------------------------------- |
+| `manifest.json`                  | MV3 配置                          |
+| `background.js`                  | SW 主逻辑（评分决策 + 消息路由 + DNR 接线）    |
+| `content.js`                     | 内容脚本主逻辑（评分引擎 + 冻结 + 横幅 + Toast） |
+| `modules/core.js`                | 共享 SSOT（配置 + 纯函数 + 豁免表）         |
+| `modules/sandbox-probe.js`       | 沙箱防追踪探测                         |
+| `modules/domain-intel.js`        | 域名情报（RDAP/ICP）                  |
+| `modules/user-trust.js`          | 用户信任记忆                          |
+| `modules/ai-link.js`             | AI/UGC 外链核查                     |
+| `modules/dnr-rules.js`           | DNR 规则生命周期                      |
+| `modules/settings-store.js`      | 设置 SSOT                         |
+| `modules/content/verify-card.js` | 官方标识检测 + 验证卡片                   |
+| `modules/content/link-scan.js`   | 外链徽标 + 面板                       |
+| `modules/content/sec-forum.js`   | 安全论坛防护                          |
+| `options/`                       | 设置面板                            |
+| `popup.html/js`                  | 弹窗（状态 / 白名单管理）                  |
+| `warning.html/js`                | 警告页                             |
+| `offscreen.js`                   | Offscreen 规则拉取                  |
+| `brands.json`                    | 内置品牌库                           |
 
 ## 许可证
 
